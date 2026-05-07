@@ -28,11 +28,17 @@
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
-import { spawn } from "node:child_process"
+// cross-spawn：跨平台安全 spawn。Windows 上 `opencode` 是 `.cmd` 包装脚本，
+// Node 18.20+/20.12+ 起 `child_process.spawn` 直接执行 .cmd 会拒绝（CVE 修复），
+// 而 `shell: true` 兜底又有参数转义陷阱。cross-spawn 内部正确处理两种情况。
+import crossSpawn from "cross-spawn"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { installAgents } from "./installer.js"
+
+/** 跨平台 spawn —— 与 child_process.spawn 同签名，但 Windows 上能正确处理 .cmd/.bat。 */
+const spawn = crossSpawn
 
 // ─────────────────────────────────────────────────────────────────────────
 // 包内资源路径（在运行时根据 import.meta.url 解析自身位置）
@@ -49,6 +55,15 @@ const AGENTS_DIR = path.join(PKG_ROOT, "agents")
 
 /** 包内 skill 源目录 */
 const SKILLS_DIR = path.join(PKG_ROOT, "skills")
+
+/** 当前 toolkit 版本（来自包根的 package.json，写入 marker 文件供查阅） */
+const PKG_VERSION: string = (() => {
+  try {
+    return (JSON.parse(fs.readFileSync(path.join(PKG_ROOT, "package.json"), "utf8")) as { version: string }).version
+  } catch {
+    return "unknown"
+  }
+})()
 
 // ─────────────────────────────────────────────────────────────────────────
 // 业务可调常量（环境变量覆盖）
@@ -390,7 +405,7 @@ const ToolkitPlugin: Plugin = async ({ client, directory }) => {
   // 仅在非递归环境（即不是审查员子进程）里跑，避免在子进程里反复写 symlink。
   if (!process.env[RECURSION_GUARD] && !process.env[LEGACY_RECURSION_GUARD]) {
     try {
-      const r = installAgents(AGENTS_DIR, directory, (m) => console.log(m))
+      const r = installAgents(AGENTS_DIR, directory, PKG_VERSION, (m) => console.log(m))
       if (r.installed > 0) {
         console.log(
           `[opencode-toolkit] installed ${r.installed} agent file(s) into ${r.targetDir}` +

@@ -1,6 +1,6 @@
 # opencode-toolkit
 
-团队共享的 [opencode](https://opencode.ai) 工具包。一个 npm 包同时分发三类资产：
+团队共享的 [opencode](https://opencode.ai) 工具包。一个 npm 包同时分发三类资产，跨平台支持 **Linux / macOS / Windows**：
 
 - **Plugin**：`tool.execute.after` 钩子上的 subagent 任务完成度审查 + 自动续跑
 - **Agents**（`agents/`）：审查员 agent `task-completion-checker`
@@ -13,7 +13,7 @@
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.1.1"]
+  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.0"]
 }
 ```
 
@@ -23,7 +23,7 @@
 
 也支持：
 
-- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.1.1"`
+- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.2.0"`
 - 私有 npm registry：`"@your-scope/opencode-toolkit"`（先在 `.npmrc` 配 scope registry）
 - 本地路径（开发期）：`"file:///abs/path/to/opencode-toolkit"`
 
@@ -95,6 +95,12 @@ npx opencode-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 syml
 
 ## 故障排查
 
+### Windows 用户报"插件不工作"
+
+v0.2.0 之前的版本在 Windows 上跑 `opencode.cmd` 时 `child_process.spawn` 会被 Node 18.20+/20.12+ 的 CVE 修复拒绝；同时 symlink 默认在 Windows 上需要管理员/Developer Mode 权限。
+
+升级到 v0.2.0+ 即可。spec 改成 `"opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.0"`，重启 opencode。
+
 ### 启动后 agent 没出现 / hook 完全不生效
 
 最常见原因：`opencode.json` 里的 plugin spec 写成了纯 `"github:user/repo#tag"`。
@@ -125,9 +131,19 @@ rm -f <工程>/.opencode/agent/task-completion-checker.md  # 旧 symlink 指向�
 
 预期行为，见上面"启动两次"的说明。第二次启动起就有了。
 
-## Windows 注意
+## 跨平台支持
 
-普通用户没建 symlink 权限，`installer.ts` 会自动降级为 copy。代价：toolkit 升级后**需要再跑一次** `npx opencode-toolkit-install` 才能更新 agent 内容。Linux/macOS 无此问题。
+v0.2.0 起完整支持 **Linux / macOS / Windows**：
+
+| 关键点 | Linux/macOS | Windows |
+|---|---|---|
+| spawn 审查员子进程 | `child_process.spawn` 直接执行 `opencode` | 通过 `cross-spawn` 正确处理 `opencode.cmd` |
+| agent 文件分发 | symlink（toolkit 升级即文件升级） | 普通用户无 symlink 权限时自动降级为 copy |
+| copy 模式下的升级 | 不涉及 | marker 文件记 `srcHash`，下次安装用 hash 判定"是 toolkit 上次写的" vs "用户改过的"，前者自动覆盖、后者保留 |
+
+Windows 用户也能像 Linux/macOS 一样**自动获得 toolkit 升级**——不再需要每次 toolkit bump 后手动重跑 `npx opencode-toolkit-install`（plugin factory 启动时会自动检测并刷新 copy）。
+
+如果 Windows 用户开启了 Developer Mode（`Settings → Update & Security → For developers`），`fs.symlinkSync` 也能成功，会走和 Linux/macOS 一样的 symlink 路径，体验完全一致。
 
 ## 维护者：怎么加新 agent / skill
 
