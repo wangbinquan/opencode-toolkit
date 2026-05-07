@@ -13,27 +13,31 @@
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["github:wangbinquan/opencode-toolkit"]
+  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.1.1"]
 }
 ```
 
+> ⚠️ **必须用 `<包名>@<spec>` 形式**，不能写成纯 `"github:wangbinquan/opencode-toolkit#v0.1.1"`。
+> opencode 用 `npm-package-arg` 解析 spec 取 `name` 字段，github 简写形式 `name` 字段为 null，会让 opencode 把整段 spec 当包名去 `node_modules/<整段 spec>/` 里找入口，必然 ENOENT。
+> 加上 `opencode-toolkit@` 前缀让 npa 正确解析，npm/arborist 仍按 github URL 拉代码并装到 `node_modules/opencode-toolkit/`。
+
 也支持：
 
-- 私有 git URL：`"git+ssh://git@your.git/...#v0.1.0"`
+- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.1.1"`
 - 私有 npm registry：`"@your-scope/opencode-toolkit"`（先在 `.npmrc` 配 scope registry）
 - 本地路径（开发期）：`"file:///abs/path/to/opencode-toolkit"`
 
-### 2. 第一次跑前手动安装一次 agent
+### 2. 启动两次 opencode（首次自动安装 agent，第二次开始可用）
+
+第一次启动 opencode 会装 toolkit、把 agent symlink 写到 `<工程>/.opencode/agent/`，但因为 opencode 在 plugin load 之前就完成了 agent 扫描，本次启动 agent 还看不到。**第二次启动起就一切正常**。
+
+如果你不想等两次启动，可以在配置插件之后、第一次启动之前手动跑一次（要求工程内已经有过任意一次 opencode 启动让 toolkit 进入 cache，否则 npx 找不到包）：
 
 ```bash
 npx opencode-toolkit-install
 ```
 
-**为什么需要这一步**：opencode 在配置启动期就扫描 `.opencode/agent/`，**早于** plugin 加载。所以插件第一次 load 时写出来的 agent symlink 对**当次启动看不见**，要下次启动才能用。这条命令把 agent 提前铺好，免得团队成员被"为什么 reviewer 找不到"困扰。
-
-如果嫌麻烦不跑，启动两次 opencode 也行——首次启动插件会写 symlink、第二次启动 opencode 才扫到。
-
-接入完成后，`pnpm install` / `npm install` / 启动 opencode 时的后台 install 会拉最新 toolkit；agent 内容因为是 symlink，**自动跟新**。
+接入完成后，新的 opencode 启动时若配置 spec 仍是相同字符串（同 tag）→ 走缓存，无操作；改成新 tag → 重装、agent symlink 自动指向新版本。
 
 ## 当前能力
 
@@ -88,6 +92,38 @@ npx opencode-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 syml
 ```
 
 之后从 `opencode.json` 里去掉 `plugin` 项即可。
+
+## 故障排查
+
+### 启动后 agent 没出现 / hook 完全不生效
+
+最常见原因：`opencode.json` 里的 plugin spec 写成了纯 `"github:user/repo#tag"`。
+
+opencode 用 `npm-package-arg` 解析 spec、取 `.name` 字段去 `node_modules/<name>/` 找入口；github 简写形式 `.name` 为 null，opencode 退化为把整段 spec 当 name，于是去 `node_modules/github:user/repo#tag/` 找 → ENOENT，**整个 plugin 加载失败**，hook 一个都不会注册。
+
+排查：
+
+```bash
+# 看最新一次 opencode 启动的日志，搜 "failed to resolve plugin server entry"
+ls -t ~/.local/share/opencode/log/ | head -1 \
+  | xargs -I{} grep -E "plugin|toolkit" ~/.local/share/opencode/log/{}
+```
+
+修复：把 spec 改成 `"opencode-toolkit@github:user/repo#tag"`，然后清掉错装的缓存：
+
+```bash
+rm -rf "$HOME/.cache/opencode/packages/github:"*opencode-toolkit*
+rm -rf "$HOME/.cache/opencode/packages/opencode-toolkit"*  # 同时清理可能存在的命名版本残留
+# 工程里若有错版残留也一并清掉：
+rm -rf <工程>/.opencode/{node_modules,package-lock.json,package.json}
+rm -f <工程>/.opencode/agent/task-completion-checker.md  # 旧 symlink 指向已删的 cache
+```
+
+下次启动会重装，再下次启动 agent + hook 全部就位。
+
+### 启动了一次 agent 还是没出现
+
+预期行为，见上面"启动两次"的说明。第二次启动起就有了。
 
 ## Windows 注意
 
