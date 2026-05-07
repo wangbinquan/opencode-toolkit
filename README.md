@@ -13,7 +13,7 @@
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.1"]
+  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.2"]
 }
 ```
 
@@ -23,7 +23,7 @@
 
 也支持：
 
-- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.2.1"`
+- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.2.2"`
 - 私有 npm registry：`"@your-scope/opencode-toolkit"`（先在 `.npmrc` 配 scope registry）
 - 本地路径（开发期）：`"file:///abs/path/to/opencode-toolkit"`
 
@@ -99,7 +99,15 @@ npx opencode-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 syml
 
 v0.2.0 之前的版本在 Windows 上跑 `opencode.cmd` 时 `child_process.spawn` 会被 Node 18.20+/20.12+ 的 CVE 修复拒绝；同时 symlink 默认在 Windows 上需要管理员/Developer Mode 权限。
 
-升级到 v0.2.1+ 即可。spec 改成 `"opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.1"`，重启 opencode。
+升级到 v0.2.2+ 即可。spec 改成 `"opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.2"`，重启 opencode。
+
+### 审查员揪着"中间过程错过一次"判 incomplete，即便最终结果是对的
+
+v0.2.2 之前的审查员 prompt 写"疑罪从有：只要任意一条审查清单触发就判 incomplete"，且 G 段把"工具反复重试 / 同一文件多次 patch"视为风险信号。结果：subagent 中途出过 tool 错误后自己纠正、改错过文件再重写、retry 几次终于成功 —— 这些**健康行为**被惩罚，verdict 变成 incomplete + reasons 引用历史污点，触发不必要的续跑。
+
+v0.2.2 起 agent prompt 引入"判定基础"元原则：**只看终态**，明确把"中间失败但后续恢复"列为**非** incomplete 信号，并在决策原则里要求 reasons 必须基于终态而非过程。
+
+升级到 v0.2.2 即可。
 
 ### Windows 上审查员只看到默认 system prompt（看不到 ORIGINAL_REQUEST/FILE_CHANGES 等）
 
@@ -110,9 +118,9 @@ v0.2.0 的具体表现：每次 task 工具结束时审查员被拉起，但 LLM
 2. 命令行长度上限 8191 字符容易被长 markdown 报告爆掉；
 3. `< > & | ^` 等 markdown 里常见字符与 cmd 元字符冲突。
 
-v0.2.1 起把 markdown 报告写到操作系统临时目录，argv 仅传 `INPUT_FILE <绝对路径>` 两个 ASCII token，审查员 agent 用 `read` 工具读文件——三平台一致行为。
+v0.2.2 起把 markdown 报告写到操作系统临时目录，argv 仅传 `INPUT_FILE <绝对路径>` 两个 ASCII token，审查员 agent 用 `read` 工具读文件——三平台一致行为。
 
-升级到 v0.2.1 即可，无其它操作。
+升级到 v0.2.2 即可，无其它操作。
 
 ### 启动后 agent 没出现 / hook 完全不生效
 
@@ -146,7 +154,7 @@ rm -f <工程>/.opencode/agent/task-completion-checker.md  # 旧 symlink 指向�
 
 ## 跨平台支持
 
-v0.2.1 起完整支持 **Linux / macOS / Windows**：
+v0.2.2 起完整支持 **Linux / macOS / Windows**：
 
 | 关键点 | Linux/macOS | Windows |
 |---|---|---|
