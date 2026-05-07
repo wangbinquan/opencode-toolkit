@@ -111,11 +111,17 @@ let cachedTmpDir: string | null = null
 /**
  * 选一个真的能写的临时目录。
  *
+ * **关键点**：项目内目录优先于 os.tmpdir()。
+ * 审查员子进程的 `read` 工具受 opencode 的 `external_directory` 权限规则约束
+ * （默认 `ask`）；写到 `os.tmpdir()` 下的文件会被判为外部目录，触发权限询问，
+ * 在 `opencode run` 非交互模式下会自动 deny / 挂起，导致审查员读不到 prompt
+ * 文件、整个 review 链路失败。把 prompt 放到工程的 `.opencode/.toolkit-tmp/`
+ * 下，read 走 within-project 路径，匹配 `read: *: allow` 直接通过。
+ *
  * 候选顺序（短路返回第一个可写的）：
  *   1. 环境变量 OPENCODE_TOOLKIT_TMP_DIR（显式覆盖）
- *   2. os.tmpdir()（平台默认）
- *   3. <工程>/.opencode/.toolkit-tmp/（plugin 已经能写 agent symlink 到 .opencode 下，
- *      这里基本必然可写；放在隐藏子目录里避免污染 agent 扫描）
+ *   2. <工程>/.opencode/.toolkit-tmp/（项目内 → 不触发 external_directory）
+ *   3. os.tmpdir()（系统默认；触发权限提示，但有些场景仍要用）
  *   4. ~/.opencode-toolkit-tmp/（家目录兜底）
  *
  * Probe 方式：mkdirSync({recursive:true}) → 写一个 0 字节探针 → 立即 unlink。
@@ -125,10 +131,11 @@ let cachedTmpDir: string | null = null
 function chooseTmpDir(projectDir: string): string {
   if (cachedTmpDir) return cachedTmpDir
 
+  const projectInternal = path.join(projectDir, ".opencode", ".toolkit-tmp")
   const candidates: string[] = []
   if (TMP_DIR_OVERRIDE) candidates.push(TMP_DIR_OVERRIDE)
+  candidates.push(projectInternal)
   candidates.push(os.tmpdir())
-  candidates.push(path.join(projectDir, ".opencode", ".toolkit-tmp"))
   candidates.push(path.join(os.homedir(), ".opencode-toolkit-tmp"))
 
   for (const dir of candidates) {
@@ -138,6 +145,15 @@ function chooseTmpDir(projectDir: string): string {
       fs.writeFileSync(probe, "")
       fs.unlinkSync(probe)
       cachedTmpDir = dir
+      // 项目内候选被选中时写一个 .gitignore，避免 prompt 临时文件被意外 commit
+      if (dir === projectInternal) {
+        const gi = path.join(dir, ".gitignore")
+        if (!fs.existsSync(gi)) {
+          try {
+            fs.writeFileSync(gi, "*\n!.gitignore\n")
+          } catch {}
+        }
+      }
       return dir
     } catch {
       continue
@@ -151,6 +167,34 @@ function chooseTmpDir(projectDir: string): string {
   )
   cachedTmpDir = candidates[candidates.length - 1]
   return cachedTmpDir
+}
+
+/**
+ * 清理可能遗留的陈年 prompt 文件——spawn 中途被 SIGKILL / 进程崩溃时 finally
+ * 没机会跑，文件会留下来。每次 plugin load 时扫一下，删超过 STALE_AGE_MS 的。
+ */
+const STALE_AGE_MS = 60 * 60 * 1000 // 1 小时
+function sweepStaleTmpFiles(projectDir: string): void {
+  const dir = chooseTmpDir(projectDir)
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return
+  }
+  const now = Date.now()
+  for (const name of entries) {
+    if (!name.startsWith("opencode-toolkit-reviewer-")) continue
+    const filepath = path.join(dir, name)
+    try {
+      const stat = fs.statSync(filepath)
+      if (now - stat.mtimeMs > STALE_AGE_MS) {
+        fs.unlinkSync(filepath)
+      }
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /**
@@ -510,6 +554,11 @@ const ToolkitPlugin: Plugin = async ({ client, directory }) => {
     } catch (err) {
       console.error("[opencode-toolkit] failed to install agents:", err)
     }
+
+    // 顺手清理上次 spawn 异常退出可能遗留的陈年 prompt 文件
+    try {
+      sweepStaleTmpFiles(directory)
+    } catch {}
   }
 
   return {
