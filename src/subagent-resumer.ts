@@ -99,6 +99,61 @@ const MAX_TAIL_TEXT = 4_000
 const MAX_TOOL_DETAIL = 400
 
 /**
+ * 显式覆盖审查员 prompt 文件的临时目录。当默认候选都不可写时（受限的企业
+ * Windows、只读容器 /tmp、用户 perm 错乱），团队成员可以指一个保证可写的
+ * 目录绕开。
+ */
+const TMP_DIR_OVERRIDE = process.env.OPENCODE_TOOLKIT_TMP_DIR
+
+/** 选中的临时目录缓存——一次会话内只 probe 一次。 */
+let cachedTmpDir: string | null = null
+
+/**
+ * 选一个真的能写的临时目录。
+ *
+ * 候选顺序（短路返回第一个可写的）：
+ *   1. 环境变量 OPENCODE_TOOLKIT_TMP_DIR（显式覆盖）
+ *   2. os.tmpdir()（平台默认）
+ *   3. <工程>/.opencode/.toolkit-tmp/（plugin 已经能写 agent symlink 到 .opencode 下，
+ *      这里基本必然可写；放在隐藏子目录里避免污染 agent 扫描）
+ *   4. ~/.opencode-toolkit-tmp/（家目录兜底）
+ *
+ * Probe 方式：mkdirSync({recursive:true}) → 写一个 0 字节探针 → 立即 unlink。
+ * 任一步抛错就跳到下一个候选。全部失败时返回最后一个候选并 warn——后续真实
+ * 写入会以更明确的错误信息失败。
+ */
+function chooseTmpDir(projectDir: string): string {
+  if (cachedTmpDir) return cachedTmpDir
+
+  const candidates: string[] = []
+  if (TMP_DIR_OVERRIDE) candidates.push(TMP_DIR_OVERRIDE)
+  candidates.push(os.tmpdir())
+  candidates.push(path.join(projectDir, ".opencode", ".toolkit-tmp"))
+  candidates.push(path.join(os.homedir(), ".opencode-toolkit-tmp"))
+
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      const probe = path.join(dir, `.write-probe-${process.pid}-${Date.now()}`)
+      fs.writeFileSync(probe, "")
+      fs.unlinkSync(probe)
+      cachedTmpDir = dir
+      return dir
+    } catch {
+      continue
+    }
+  }
+
+  console.error(
+    `[opencode-toolkit] WARNING: no writable tmp dir found. Tried in order: ${candidates.join(
+      " | ",
+    )}. Set OPENCODE_TOOLKIT_TMP_DIR to a known-writable absolute path to fix.`,
+  )
+  cachedTmpDir = candidates[candidates.length - 1]
+  return cachedTmpDir
+}
+
+/**
  * 防递归哨兵环境变量。
  *
  * spawn 出去的审查员子进程会再次加载本插件——若不阻断，审查员一旦触发任何
@@ -320,16 +375,20 @@ function extractVerdictJson(text: string): Verdict | null {
  * - 临时文件由 finally 兜底删除（即便子进程异常退出也不留垃圾）。
  */
 async function consultReviewer(promptText: string, cwd: string): Promise<Verdict | null> {
-  // 临时文件名：时间戳 + 进程号 + 随机串，避免并发冲突
+  // 选一个真能写的临时目录（带候选链 + probe + 缓存），适配受限环境。
+  const tmpDir = chooseTmpDir(cwd)
   const tmpFile = path.join(
-    os.tmpdir(),
+    tmpDir,
     `opencode-toolkit-reviewer-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}.md`,
   )
 
   try {
     fs.writeFileSync(tmpFile, promptText, "utf8")
   } catch (err) {
-    console.error("[opencode-toolkit] failed to write reviewer prompt to tmp file:", err)
+    console.error(
+      `[opencode-toolkit] failed to write reviewer prompt to ${tmpFile}: ${err instanceof Error ? err.message : err}\n` +
+        `  Set OPENCODE_TOOLKIT_TMP_DIR to a writable absolute path to override the tmp dir candidate chain.`,
+    )
     return null
   }
 
