@@ -489,7 +489,22 @@ function extractVerdictJsonLegacy(text: string): Verdict | null {
  * - REVIEWER_TIMEOUT_MS 后强杀子进程，verdict 视为 null（调用方应停止重试）。
  * - 临时文件由 finally 兜底删除（即便子进程异常退出也不留垃圾）。
  */
-async function consultReviewer(promptText: string, cwd: string): Promise<Verdict | null> {
+/**
+ * 审查员模型覆盖配置（运行时计算）。
+ *
+ * 优先级：env > opencode.json plugin options > undefined（让 opencode 走默认）。
+ * 调用方传入 options（可来自插件第二个参数），env 总是最高优先级。
+ */
+type ReviewerOverride = {
+  model?: string
+  variant?: string
+}
+
+async function consultReviewer(
+  promptText: string,
+  cwd: string,
+  override: ReviewerOverride,
+): Promise<Verdict | null> {
   // 选一个真能写的临时目录（带候选链 + probe + 缓存），适配受限环境。
   const tmpDir = chooseTmpDir(cwd)
   const tmpFile = path.join(
@@ -507,11 +522,18 @@ async function consultReviewer(promptText: string, cwd: string): Promise<Verdict
     return null
   }
 
+  // 组装 spawn 参数。--model / --variant 仅在显式覆盖时附加，否则让 opencode 走自身默认
+  // （agent frontmatter > config.model > opencode default）。
+  const argv: string[] = ["run", "--agent", REVIEWER_AGENT]
+  if (override.model) argv.push("--model", override.model)
+  if (override.variant) argv.push("--variant", override.variant)
+  // 两个 token "INPUT_FILE" + 临时文件路径——跨 cmd.exe / sh / cross-spawn 安全（短、纯 ASCII）
+  argv.push("INPUT_FILE", tmpFile)
+
   try {
     return await new Promise<Verdict | null>((resolve) => {
       const env = { ...process.env, [RECURSION_GUARD]: "1", [LEGACY_RECURSION_GUARD]: "1" }
-      // 两个 token：跨 cmd.exe / sh / cross-spawn 的边界都安全（短、纯 ASCII、无空格切分歧义）
-      const child = spawn(OPENCODE_BIN, ["run", "--agent", REVIEWER_AGENT, "INPUT_FILE", tmpFile], {
+      const child = spawn(OPENCODE_BIN, argv, {
         cwd,
         env,
         stdio: ["ignore", "pipe", "pipe"],
@@ -593,7 +615,47 @@ function rewriteTaskResult(original: string, finalText: string, attempts: number
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
+ * 工程 opencode.json 里能传给 toolkit 的可选项。元组形式声明插件即可：
+ *
+ *     "plugin": [["opencode-toolkit@github:...", {
+ *        "reviewerModel": "anthropic/claude-haiku-4-5-20251001",
+ *        "reviewerVariant": "minimal"
+ *     }]]
+ *
+ * 字段：
+ *   - reviewerModel:    审查员调用 `opencode run` 时附加 `--model <value>`，
+ *                       格式 `provider/model`，例如 `anthropic/claude-haiku-4-5-20251001`。
+ *                       不传时 opencode 走默认（agent frontmatter > config.model）。
+ *   - reviewerVariant:  附加 `--variant <value>`（reasoning 努力度，provider 相关，
+ *                       常见值 `high` / `medium` / `low` / `minimal`）。
+ *
+ * 同名环境变量优先级更高（per-shell 覆盖语义）：
+ *   - OPENCODE_TOOLKIT_REVIEWER_MODEL
+ *   - OPENCODE_TOOLKIT_REVIEWER_VARIANT
+ */
+type ToolkitOptions = {
+  reviewerModel?: unknown
+  reviewerVariant?: unknown
+}
+
+function resolveReviewerOverride(options: ToolkitOptions | undefined): ReviewerOverride {
+  const fromOpts = (key: keyof ToolkitOptions): string | undefined => {
+    const v = options?.[key]
+    return typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined
+  }
+  return {
+    model: process.env.OPENCODE_TOOLKIT_REVIEWER_MODEL ?? fromOpts("reviewerModel"),
+    variant: process.env.OPENCODE_TOOLKIT_REVIEWER_VARIANT ?? fromOpts("reviewerVariant"),
+  }
+}
+
+/**
  * 插件主体。opencode 加载本包时调用一次，返回的对象就是 Hooks 配置。
+ *
+ * 入参：
+ *   - input:   PluginInput（含 client / project / directory / worktree / serverUrl / $ ）
+ *   - options: opencode.json 里 `["opencode-toolkit", { ... }]` 元组形式传入的对象，
+ *              当前可选字段见 ToolkitOptions
  *
  * 启动期副作用（在返回 hooks 对象之前完成）：
  *   1. 把包内 agents/*.md 安装到 directory/.opencode/agent/。**对当次启动无效**，
@@ -604,7 +666,15 @@ function rewriteTaskResult(original: string, finalText: string, attempts: number
  *     单次启动即生效）。
  *   - tool.execute.after: 在每次 task 工具调用结束后做完成度审查 + 续跑。
  */
-const ToolkitPlugin: Plugin = async ({ client, directory }) => {
+const ToolkitPlugin: Plugin = async ({ client, directory }, options) => {
+  const reviewerOverride = resolveReviewerOverride(options as ToolkitOptions | undefined)
+  if (reviewerOverride.model || reviewerOverride.variant) {
+    console.log(
+      `[opencode-toolkit] reviewer override: ${reviewerOverride.model ? `model=${reviewerOverride.model} ` : ""}${
+        reviewerOverride.variant ? `variant=${reviewerOverride.variant}` : ""
+      }`.trim(),
+    )
+  }
   // ── 启动期：安装/更新 agent 文件
   // 仅在非递归环境（即不是审查员子进程）里跑，避免在子进程里反复写 symlink。
   if (!process.env[RECURSION_GUARD] && !process.env[LEGACY_RECURSION_GUARD]) {
@@ -694,7 +764,7 @@ const ToolkitPlugin: Plugin = async ({ client, directory }) => {
           conversationTail,
         })
 
-        const verdict = await consultReviewer(reviewerPrompt, directory)
+        const verdict = await consultReviewer(reviewerPrompt, directory, reviewerOverride)
         lastVerdict = verdict
 
         if (!verdict) {
