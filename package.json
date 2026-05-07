@@ -1,0 +1,40 @@
+{
+  "name": "opencode-toolkit",
+  "version": "0.1.0",
+  "description": "团队共享的 opencode 插件 + agent + skill 集合：当前提供 subagent 任务完成度审查与自动续跑",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/index.ts"
+  },
+  "bin": {
+    "opencode-toolkit-install": "./bin/install.mjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "agents",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "opencode": ">=0.1.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*",
+    "@opencode-ai/sdk": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wangbinquan/opencode-toolkit.git"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "opencode-agent",
+    "subagent",
+    "task-completion"
+  ],
+  "license": "MIT"
+}
