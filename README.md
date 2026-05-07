@@ -97,7 +97,8 @@ npx opencode-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 syml
 
 - 新 agent：直接放 `agents/<name>.md`，frontmatter 带 `mode: all`（CLI 可调）。下个版本团队成员升级后自动可用。
 - 新 skill：放 `skills/<name>/SKILL.md`，结构按 opencode skill 规范。无需改 plugin 代码。
-- 调整插件钩子行为：改 `src/index.ts`。
+- 调整 subagent-resumer 插件行为：改 `src/subagent-resumer.ts`。
+- 加新插件：新建 `src/<feature>.ts`，然后在 `src/index.ts` 里把所有子插件的 hooks 合并到一个 Plugin 工厂一并返回（`src/index.ts` 头部注释里有合并模板）。
 - 调整 agent 安装逻辑：改 `src/installer.ts` 同时同步 `bin/install.mjs`。
 
 ## 发版流程
@@ -122,7 +123,8 @@ opencode-toolkit/
 ├── package.json              # exports."./server" + bin
 ├── README.md
 ├── src/
-│   ├── index.ts              # Plugin 工厂 + 钩子
+│   ├── index.ts              # Toolkit 总入口（barrel）；多插件合并点
+│   ├── subagent-resumer.ts   # 当前插件：subagent 完成度审查 + 自动续跑
 │   └── installer.ts          # agent symlink 安装逻辑（plugin 内调用）
 ├── bin/
 │   └── install.mjs           # 命令行 installer（npx 入口，纯 ESM）
