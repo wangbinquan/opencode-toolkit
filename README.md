@@ -13,7 +13,7 @@
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.4"]
+  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.5"]
 }
 ```
 
@@ -23,7 +23,7 @@
 
 也支持：
 
-- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.2.4"`
+- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.2.5"`
 - 私有 npm registry：`"@your-scope/opencode-toolkit"`（先在 `.npmrc` 配 scope registry）
 - 本地路径（开发期）：`"file:///abs/path/to/opencode-toolkit"`
 
@@ -100,7 +100,44 @@ npx opencode-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 syml
 
 v0.2.0 之前的版本在 Windows 上跑 `opencode.cmd` 时 `child_process.spawn` 会被 Node 18.20+/20.12+ 的 CVE 修复拒绝；同时 symlink 默认在 Windows 上需要管理员/Developer Mode 权限。
 
-升级到 v0.2.4+ 即可。spec 改成 `"opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.4"`，重启 opencode。
+升级到 v0.2.5+ 即可。spec 改成 `"opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.5"`，重启 opencode。
+
+### 报错 "no parseable JSON verdict"（v0.2.4 及之前）
+
+**症状**：reviewer 子进程跑完了、生成了完整内容（log 里能看到正常的 message.part.delta 和 step-finish），但插件主进程 stderr 报：
+
+```
+[opencode-toolkit] reviewer exit=0, no parseable JSON verdict
+  stdout tail: ...
+```
+
+**根因**：reviewer LLM（特别是中文模型如 GLM、DeepSeek、Qwen）在 JSON 字符串值里写自然语言时，**经常忘记转义内嵌引号**：
+
+```json
+"reasons": [
+  "subagent 在最后明确说了"做完了"，符合任务要求"
+                       ↑       ↑ 这两个未转义的 " 让 JSON.parse 直接挂掉
+]
+```
+
+`extractVerdictJson` 的 `JSON.parse` 失败 → verdict 为 null → 续跑循环停。reviewer 实际判得对，结果被引号问题吞了。
+
+**修法（v0.2.5）**：判决格式从 JSON 换成 XML 标签：
+
+```xml
+<task_completion_review>
+<verdict>complete</verdict>
+<confidence>high</confidence>
+<reasons>
+- subagent 在最后明确说了"做完了"，符合任务要求    ← 引号、换行、单引号、中文标点全部宽容
+</reasons>
+...
+</task_completion_review>
+```
+
+XML 标签内文本是字面量，零转义负担。Plugin 优先解析 XML，老 JSON 格式作为 fallback 仍然支持（仅当 LLM hallucinate 回退时触发）。
+
+升级到 v0.2.5 即可。
 
 ### 报"无法写入临时文件"或 reviewer 拿不到判决（v0.2.3 及之前）
 
@@ -112,15 +149,15 @@ service=permission permission=external_directory
   action={"permission":"external_directory","action":"ask"} evaluated
 ```
 
-v0.2.4 起把候选顺序里**项目内目录提到 `os.tmpdir()` 之前**：默认走 `<工程>/.opencode/.toolkit-tmp/`，read 走 within-project 路径直接命中 `read: *: allow`，不再触发 external_directory ask。同时自动写 `.gitignore` 避免污染 git，每次 plugin load 顺手清理超 1 小时的陈年残留。
+v0.2.5 起把候选顺序里**项目内目录提到 `os.tmpdir()` 之前**：默认走 `<工程>/.opencode/.toolkit-tmp/`，read 走 within-project 路径直接命中 `read: *: allow`，不再触发 external_directory ask。同时自动写 `.gitignore` 避免污染 git，每次 plugin load 顺手清理超 1 小时的陈年残留。
 
-升级到 v0.2.4 即可。
+升级到 v0.2.5 即可。
 
 ### 报错 "failed to write reviewer prompt to ..."（受限环境 / 只读 tmp）
 
-v0.2.1 ~ v0.2.4 在 `os.tmpdir()` 单点不可写时直接放弃审查（受限的企业 Windows 把 `%TEMP%` 改到只读路径、只读容器 /tmp、用户 perm 错乱都可能触发）。
+v0.2.1 ~ v0.2.5 在 `os.tmpdir()` 单点不可写时直接放弃审查（受限的企业 Windows 把 `%TEMP%` 改到只读路径、只读容器 /tmp、用户 perm 错乱都可能触发）。
 
-v0.2.4 起会按候选链探测可写目录：`OPENCODE_TOOLKIT_TMP_DIR` → `os.tmpdir()` → `<工程>/.opencode/.toolkit-tmp/` → `~/.opencode-toolkit-tmp/`，第一个能 mkdir + 写探针 + 删除的就用。基本不会再撞这个问题。
+v0.2.5 起会按候选链探测可写目录：`OPENCODE_TOOLKIT_TMP_DIR` → `os.tmpdir()` → `<工程>/.opencode/.toolkit-tmp/` → `~/.opencode-toolkit-tmp/`，第一个能 mkdir + 写探针 + 删除的就用。基本不会再撞这个问题。
 
 如果运行时仍然看到 `WARNING: no writable tmp dir found. Tried in order: ...` 的提示，意味着这四个候选都不可写。修法：
 
@@ -130,15 +167,15 @@ export OPENCODE_TOOLKIT_TMP_DIR="$HOME/some/dir"   # Linux/macOS
 setx OPENCODE_TOOLKIT_TMP_DIR "C:\path\to\dir"     # Windows（永久）
 ```
 
-升级到 v0.2.4 即可。
+升级到 v0.2.5 即可。
 
 ### 审查员揪着"中间过程错过一次"判 incomplete，即便最终结果是对的
 
-v0.2.4 之前的审查员 prompt 写"疑罪从有：只要任意一条审查清单触发就判 incomplete"，且 G 段把"工具反复重试 / 同一文件多次 patch"视为风险信号。结果：subagent 中途出过 tool 错误后自己纠正、改错过文件再重写、retry 几次终于成功 —— 这些**健康行为**被惩罚，verdict 变成 incomplete + reasons 引用历史污点，触发不必要的续跑。
+v0.2.5 之前的审查员 prompt 写"疑罪从有：只要任意一条审查清单触发就判 incomplete"，且 G 段把"工具反复重试 / 同一文件多次 patch"视为风险信号。结果：subagent 中途出过 tool 错误后自己纠正、改错过文件再重写、retry 几次终于成功 —— 这些**健康行为**被惩罚，verdict 变成 incomplete + reasons 引用历史污点，触发不必要的续跑。
 
-v0.2.4 起 agent prompt 引入"判定基础"元原则：**只看终态**，明确把"中间失败但后续恢复"列为**非** incomplete 信号，并在决策原则里要求 reasons 必须基于终态而非过程。
+v0.2.5 起 agent prompt 引入"判定基础"元原则：**只看终态**，明确把"中间失败但后续恢复"列为**非** incomplete 信号，并在决策原则里要求 reasons 必须基于终态而非过程。
 
-升级到 v0.2.4 即可。
+升级到 v0.2.5 即可。
 
 ### Windows 上审查员只看到默认 system prompt（看不到 ORIGINAL_REQUEST/FILE_CHANGES 等）
 
@@ -149,9 +186,9 @@ v0.2.0 的具体表现：每次 task 工具结束时审查员被拉起，但 LLM
 2. 命令行长度上限 8191 字符容易被长 markdown 报告爆掉；
 3. `< > & | ^` 等 markdown 里常见字符与 cmd 元字符冲突。
 
-v0.2.4 起把 markdown 报告写到操作系统临时目录，argv 仅传 `INPUT_FILE <绝对路径>` 两个 ASCII token，审查员 agent 用 `read` 工具读文件——三平台一致行为。
+v0.2.5 起把 markdown 报告写到操作系统临时目录，argv 仅传 `INPUT_FILE <绝对路径>` 两个 ASCII token，审查员 agent 用 `read` 工具读文件——三平台一致行为。
 
-升级到 v0.2.4 即可，无其它操作。
+升级到 v0.2.5 即可，无其它操作。
 
 ### 启动后 agent 没出现 / hook 完全不生效
 
@@ -185,7 +222,7 @@ rm -f <工程>/.opencode/agent/task-completion-checker.md  # 旧 symlink 指向�
 
 ## 跨平台支持
 
-v0.2.4 起完整支持 **Linux / macOS / Windows**：
+v0.2.5 起完整支持 **Linux / macOS / Windows**：
 
 | 关键点 | Linux/macOS | Windows |
 |---|---|---|
