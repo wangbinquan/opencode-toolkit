@@ -13,7 +13,7 @@
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.0"]
+  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.1"]
 }
 ```
 
@@ -23,7 +23,7 @@
 
 也支持：
 
-- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.2.0"`
+- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.2.1"`
 - 私有 npm registry：`"@your-scope/opencode-toolkit"`（先在 `.npmrc` 配 scope registry）
 - 本地路径（开发期）：`"file:///abs/path/to/opencode-toolkit"`
 
@@ -99,7 +99,20 @@ npx opencode-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 syml
 
 v0.2.0 之前的版本在 Windows 上跑 `opencode.cmd` 时 `child_process.spawn` 会被 Node 18.20+/20.12+ 的 CVE 修复拒绝；同时 symlink 默认在 Windows 上需要管理员/Developer Mode 权限。
 
-升级到 v0.2.0+ 即可。spec 改成 `"opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.0"`，重启 opencode。
+升级到 v0.2.1+ 即可。spec 改成 `"opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.1"`，重启 opencode。
+
+### Windows 上审查员只看到默认 system prompt（看不到 ORIGINAL_REQUEST/FILE_CHANGES 等）
+
+v0.2.0 的具体表现：每次 task 工具结束时审查员被拉起，但 LLM 像没收到任何 user message 一样直接按 system prompt 回应；review 内容跟你的真实 subagent 任务毫无关系，verdict 经常是 incomplete 但 reasons 都是空泛的。
+
+根因：Windows `cmd.exe` 包装 `.cmd` 时——
+1. argv 里的 `\n` 会被当成命令终止符，多行 markdown 的第一行之后全部丢失；
+2. 命令行长度上限 8191 字符容易被长 markdown 报告爆掉；
+3. `< > & | ^` 等 markdown 里常见字符与 cmd 元字符冲突。
+
+v0.2.1 起把 markdown 报告写到操作系统临时目录，argv 仅传 `INPUT_FILE <绝对路径>` 两个 ASCII token，审查员 agent 用 `read` 工具读文件——三平台一致行为。
+
+升级到 v0.2.1 即可，无其它操作。
 
 ### 启动后 agent 没出现 / hook 完全不生效
 
@@ -133,7 +146,7 @@ rm -f <工程>/.opencode/agent/task-completion-checker.md  # 旧 symlink 指向�
 
 ## 跨平台支持
 
-v0.2.0 起完整支持 **Linux / macOS / Windows**：
+v0.2.1 起完整支持 **Linux / macOS / Windows**：
 
 | 关键点 | Linux/macOS | Windows |
 |---|---|---|

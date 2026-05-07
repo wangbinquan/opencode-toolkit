@@ -33,6 +33,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 // 而 `shell: true` 兜底又有参数转义陷阱。cross-spawn 内部正确处理两种情况。
 import crossSpawn from "cross-spawn"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { installAgents } from "./installer.js"
@@ -250,9 +251,10 @@ function buildReviewerPrompt(input: {
           })
           .join("\n")
 
+  // 文件以 `## ORIGINAL_REQUEST` 开头是有意为之：审查员 agent 同时支持
+  // "INPUT_FILE <path>"（推荐）和"直接 inline 这段 markdown"两种输入形式，
+  // 后者用首行 `## ORIGINAL_REQUEST` 作为识别标志。
   return [
-    "你正在审查上一个 subagent 的任务完成度。请按你的 system prompt 所定义的清单严格审查，并以最后一个 ```json 代码块输出判决。",
-    "",
     "## ORIGINAL_REQUEST",
     input.request || "(empty)",
     "",
@@ -306,43 +308,71 @@ function extractVerdictJson(text: string): Verdict | null {
 /**
  * 启动独立 opencode 进程跑审查员，等待结束并解析 JSON 判决。
  *
+ * 关键：promptText **不**作为 argv 直接传——Windows 上 `cmd.exe` 包装 `.cmd`
+ * 时会把含 `\n` 的 argv 在第一行截断、命令行长度上限 8191 字符也容易爆掉，
+ * 导致审查员看不到任何输入。改成把 promptText 写到 OS 临时目录，argv 只传
+ * 两个 ASCII token：`INPUT_FILE` + `<绝对路径>`。审查员 system prompt 见到
+ * 后会用 `read` 工具读文件——三平台一致行为。
+ *
  * - cwd 必须是宿主项目目录，子进程才能在 .opencode/agent/ 找到审查员。
  * - 注入 RECURSION_GUARD 防自循环。
  * - REVIEWER_TIMEOUT_MS 后强杀子进程，verdict 视为 null（调用方应停止重试）。
+ * - 临时文件由 finally 兜底删除（即便子进程异常退出也不留垃圾）。
  */
 async function consultReviewer(promptText: string, cwd: string): Promise<Verdict | null> {
-  return await new Promise<Verdict | null>((resolve) => {
-    const env = { ...process.env, [RECURSION_GUARD]: "1", [LEGACY_RECURSION_GUARD]: "1" }
-    const child = spawn(OPENCODE_BIN, ["run", "--agent", REVIEWER_AGENT, promptText], {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
+  // 临时文件名：时间戳 + 进程号 + 随机串，避免并发冲突
+  const tmpFile = path.join(
+    os.tmpdir(),
+    `opencode-toolkit-reviewer-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}.md`,
+  )
+
+  try {
+    fs.writeFileSync(tmpFile, promptText, "utf8")
+  } catch (err) {
+    console.error("[opencode-toolkit] failed to write reviewer prompt to tmp file:", err)
+    return null
+  }
+
+  try {
+    return await new Promise<Verdict | null>((resolve) => {
+      const env = { ...process.env, [RECURSION_GUARD]: "1", [LEGACY_RECURSION_GUARD]: "1" }
+      // 两个 token：跨 cmd.exe / sh / cross-spawn 的边界都安全（短、纯 ASCII、无空格切分歧义）
+      const child = spawn(OPENCODE_BIN, ["run", "--agent", REVIEWER_AGENT, "INPUT_FILE", tmpFile], {
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      let stdout = ""
+      let stderr = ""
+      const timer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL")
+        } catch {}
+      }, REVIEWER_TIMEOUT_MS)
+      child.stdout?.on("data", (d) => (stdout += d.toString()))
+      child.stderr?.on("data", (d) => (stderr += d.toString()))
+      child.on("error", (err) => {
+        clearTimeout(timer)
+        console.error("[opencode-toolkit] reviewer spawn error:", err)
+        resolve(null)
+      })
+      child.on("close", (code) => {
+        clearTimeout(timer)
+        const verdict = extractVerdictJson(stdout)
+        if (!verdict) {
+          console.error(
+            `[opencode-toolkit] reviewer exit=${code}, no parseable JSON verdict\n  stdout tail: ${stdout.slice(-500)}\n  stderr tail: ${stderr.slice(-500)}`,
+          )
+        }
+        resolve(verdict)
+      })
     })
-    let stdout = ""
-    let stderr = ""
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL")
-      } catch {}
-    }, REVIEWER_TIMEOUT_MS)
-    child.stdout?.on("data", (d) => (stdout += d.toString()))
-    child.stderr?.on("data", (d) => (stderr += d.toString()))
-    child.on("error", (err) => {
-      clearTimeout(timer)
-      console.error("[opencode-toolkit] reviewer spawn error:", err)
-      resolve(null)
-    })
-    child.on("close", (code) => {
-      clearTimeout(timer)
-      const verdict = extractVerdictJson(stdout)
-      if (!verdict) {
-        console.error(
-          `[opencode-toolkit] reviewer exit=${code}, no parseable JSON verdict\n  stdout tail: ${stdout.slice(-500)}\n  stderr tail: ${stderr.slice(-500)}`,
-        )
-      }
-      resolve(verdict)
-    })
-  })
+  } finally {
+    // 子进程已退出（resolve 完成 await 才到这里），可以安全删
+    try {
+      fs.unlinkSync(tmpFile)
+    } catch {}
+  }
 }
 
 /**

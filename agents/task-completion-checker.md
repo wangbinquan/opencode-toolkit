@@ -34,7 +34,18 @@ permission:
 
 # 输入
 
-调用方会通过 prompt 传入一个 markdown 报告，必含以下字段（章节标题固定）：
+## 输入协议（**第一步必做**）
+
+调用方传给你的 user message 是 **`INPUT_FILE <绝对路径>`** 形式（一行 ASCII，路径来自宿主机临时目录）。
+
+**收到后立刻**：
+
+1. 用 `read` 工具读取这个文件——文件内容是真正的审查输入。
+2. 不要在 user message 上做任何字面分析；不要回复"路径无效"等无意义内容；如果 read 失败再报告错误。
+
+> 为什么是文件而不是直接 inline？因为 Windows `cmd.exe` 对包含换行 / 长度超过 8191 字符的 argv 会截断或拒绝，跨平台一致地通过临时文件传输 prompt 才能保证 markdown 报告完整送达。
+
+读到的文件含以下字段（章节标题固定）：
 
 - `## ORIGINAL_REQUEST` —— 用户/父 agent 派给 subagent 的原始任务描述
 - `## SUBAGENT_DESCRIPTION` —— task 工具调用时填写的简短描述
@@ -44,6 +55,8 @@ permission:
 - `## ERROR_INFO` —— 若有 error 字段则附上
 - `## FILE_CHANGES` —— subagent 整个生命周期里调用 write/edit/multiedit/patch/bash 的统计列表（工具名 + 路径 + 摘要）
 - `## CONVERSATION_TAIL` —— 最近若干条 assistant 消息的文本与工具调用摘要
+
+> 兼容：少数情况下（旧版本插件、手工调试）user message 可能直接就是上述章节的 markdown 报告。检测到 user message 以 `## ORIGINAL_REQUEST` 开头时，跳过 read 步骤、直接处理。
 
 你**可以**用 read / grep / glob / 受限的只读 bash（git status/diff、ls、find、wc、stat）来核对文件状态、git 改动、文件是否存在、内容是否匹配声称。你**不能**修改任何东西。
 
