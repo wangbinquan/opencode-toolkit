@@ -1,10 +1,13 @@
 # opencode-toolkit
 
-团队共享的 [opencode](https://opencode.ai) 工具包。一个 npm 包同时分发三类资产，跨平台支持 **Linux / macOS / Windows**：
+团队共享工具包，核心能力是 **subagent 任务完成度审查 + 自动续跑**。**一仓两宿主**——同一份审查逻辑（`src/core/`）既作 [opencode](https://opencode.ai) 插件、也作 [Claude Code](https://claude.com/claude-code) hook。跨平台支持 **Linux / macOS / Windows**：
 
-- **Plugin**：`tool.execute.after` 钩子上的 subagent 任务完成度审查 + 自动续跑
-- **Agents**（`agents/`）：审查员 agent `task-completion-checker`
+- **opencode Plugin**：`tool.execute.after` 钩子上的 subagent 完成度审查 + 自动续跑
+- **Claude Code Hook**：`SubagentStop` 上的同款审查 + 续跑（见下文「Claude Code 接入」）
+- **Agents**（`agents/`）：审查员 agent `task-completion-checker`（两宿主共用同一正文）
 - **Skills**（`skills/`）：通过 `config.skills.paths` 注入到 opencode
+
+> 两个宿主在进程层面从不共存（opencode 走 `exports["./server"]`，Claude 走 `.claude/settings.json` 的 command hook），磁盘上只共享 `src/core/` 与包元数据。详见 `src/index.ts` 顶部的目录约定说明。
 
 ## 团队成员接入（两步）
 
@@ -56,6 +59,99 @@ npx opencode-toolkit-install
 按 40+ 条审查清单（表层完成性 / 需求覆盖 / 文件改动一致性 / 质量信号 / 自终止幻觉 / 任务类型特异化 / 流程异常）严格判决。详见 `agents/task-completion-checker.md`。
 
 `mode: all`，可被 `opencode run --agent task-completion-checker "..."` 直接拉起。
+
+## Claude Code 接入（SubagentStop hook）
+
+同一个包也能给 Claude Code 用——复用同一份审查员 rubric 与 `<task_completion_review>` 判决协议（`src/core/` + `agents/task-completion-checker.md`），只是把 opencode 的 `tool.execute.after` + `session.prompt` **同步循环**，换成 Claude Code 的 `SubagentStop` hook + `decision:block` **事件驱动循环**。
+
+### 接入
+
+> 前提：`node` 与 `claude` 都在 PATH 上——hook 是 `node` 脚本，审查员通过 spawn `claude -p` 跑。
+
+**① 先把包装进目标工程**（这一步同时带来运行期依赖 `cross-spawn`；与 opencode 不同，Claude Code 没有自动装包机制，需显式装）：
+
+```bash
+cd /path/to/你的工程
+# 发布后：从 npm 或 github 装
+npm install opencode-toolkit          # 或 npm install github:wangbinquan/opencode-toolkit#vX.Y.Z
+# 未发布 / 本地开发：用本地 checkout 路径装
+npm install /abs/path/to/opencode-toolkit
+```
+
+**② 把 SubagentStop hook 幂等合并进 `<工程>/.claude/settings.json`**（不碰你已有的 hook）：
+
+```bash
+npx opencode-toolkit-install --claude
+```
+
+写入内容（保留你的其它配置）：
+
+```json
+{
+  "hooks": {
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "node \"<abs>/node_modules/opencode-toolkit/src/claude/hook.mjs\"", "timeout": 600 } ] }
+    ]
+  }
+}
+```
+
+**③ 重启 Claude Code**（开新 session）让它读到新 hook；用 `/hooks` 可确认已注册。
+
+卸载：`npx opencode-toolkit-install --claude --uninstall`（只删自己那条，保留你的其它 hook）。
+
+> 纯本地调试、不想装进工程也行：先在 checkout 里 `npm install` 拉到 `cross-spawn`，再
+> `node /abs/path/to/opencode-toolkit/bin/install.mjs --claude /path/to/你的工程`——hook 命令会指向 checkout 里的 `src/claude/hook.mjs`。
+
+### 工作机制
+
+每个 subagent（Task 工具）结束 → `SubagentStop` 触发 `src/claude/hook.mjs`：
+
+1. 读 hook 的 stdin JSON（`agent_id` / `agent_type` / `transcript_path` / `cwd`）
+2. 解析子 agent 的 transcript JSONL → 抽 `FINAL_OUTPUT` / `FILE_CHANGES` / `CONVERSATION_TAIL` / finish/error（`src/claude/transcript.mjs`）
+3. spawn `claude -p`（注入递归哨兵 `CC_TOOLKIT_REVIEWING` 防自派生），把 `agents/task-completion-checker.md` 正文当 system prompt，拿 `<task_completion_review>` XML 判决
+4. **complete** → exit 0 放行；**incomplete** → stdout 输出 `{"decision":"block","reason": 续跑指令}`，Claude 把 reason 喂回**同一** subagent，在原上下文续跑
+5. 它续跑完再停 → 再次触发 hook → 再审；由 `agent_id` 维度的计数文件精确限制最多 `CC_TOOLKIT_MAX_RETRIES` 次
+
+**与 opencode 的差异**：opencode 在单次 hook 里同步跑完整个循环、并改写 task 输出对父 agent 透明；Claude Code 的循环摊在多次 hook 调用里（故计数必须落盘），且无法改写 Task 返回值——但续跑发生在同一上下文内，subagent 自己的最终修正消息本就是回给父 agent 的结果，无需改写。
+
+### 可调环境变量（Claude 侧）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `CC_TOOLKIT_MAX_RETRIES` | `3` | 续跑次数上限 |
+| `CC_TOOLKIT_REVIEW_AGENTS` | （全审） | 只审这些 `agent_type`，逗号分隔；空 = 全部 |
+| `CC_TOOLKIT_REVIEWER_MODEL` | （claude 默认） | 审查员 `claude -p --model` 的值，建议便宜模型如 `claude-haiku-4-5-20251001` |
+| `CC_TOOLKIT_CLAUDE_BIN` | `claude` | claude 可执行文件路径 |
+| `CC_TOOLKIT_TIMEOUT_MS` | `180000` | 单次审查超时 |
+| `CC_TOOLKIT_TAIL_MESSAGES` | `6` | 传给审查员的尾部消息条数 |
+| `CC_TOOLKIT_TMP_DIR` | （自动选） | 计数文件目录覆盖（默认 `<工程>/.claude/.toolkit-tmp/`） |
+
+**怎么设**：写进 `.claude/settings.json` 顶层 `env`（per-工程，Claude Code 注入给 hook），或在启动 `claude` 的 shell 里 `export`（hook 继承启动环境，保底）：
+
+```json
+{
+  "env": {
+    "CC_TOOLKIT_REVIEWER_MODEL": "claude-haiku-4-5-20251001",
+    "CC_TOOLKIT_MAX_RETRIES": "2",
+    "CC_TOOLKIT_REVIEW_AGENTS": "general-purpose,Explore"
+  },
+  "hooks": { "SubagentStop": [ "...上面 --claude 装好的..." ] }
+}
+```
+
+### 确认生效 / 调试
+
+装好后**无需额外操作**——照常让主 agent 派 subagent（Task 工具）即可。每个 subagent 结束时：判 complete 静默放行；判 incomplete 则在原上下文自动续跑，最多 `MAX_RETRIES` 次后才把结果交回主 agent。
+
+- hook 诊断写在 stderr，形如 `[cc-toolkit] agent=… attempt=1/3 reasons: …`；`claude --debug` 能看到 hook 执行
+- 快速验证：故意派一个容易半途而废的 subagent（如"实现 X 并写测试"但易漏测试），看是否被打回续跑
+- **成本**：每次审查 = 一次 `claude -p` 调用，最多 `MAX_RETRIES` 次 / subagent。建议审查员用便宜模型 + `CC_TOOLKIT_REVIEW_AGENTS` 限定范围
+
+### 两个建议实测坐实的点
+
+1. **`agent_id` 跨续跑是否稳定**：block→续跑→再停 周期里 `agent_id` 是否不变（决定它能否当计数 key；若不稳定，退化为只靠平台的 `stop_hook_active` 限次）。
+2. **`decision:block` 是否带上下文续跑**：`SubagentStop` 的 reason 是否确实喂回同一 subagent 的既有上下文（官方文档明确 "prevents the subagent from stopping"，对称于 `Stop` 的续跑语义，置信度高，仍建议一个最小复现坐实）。
 
 ## 可调环境变量
 

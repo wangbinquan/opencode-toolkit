@@ -37,6 +37,13 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { installAgents } from "./installer.js"
+// 平台无关 core：reviewer prompt 组装 / 判决解析 / 续跑指令生成 / 文本工具。
+// opencode 与 claude 两个 adapter 共用同一份实现（见 src/core/）。
+import { clip } from "../core/util.mjs"
+import { buildReviewerPrompt } from "../core/reviewer-prompt.mjs"
+import { extractVerdict } from "../core/verdict.mjs"
+import { buildContinuation } from "../core/continuation.mjs"
+import type { FileChange, Verdict } from "../core/types.js"
 
 /** 跨平台 spawn —— 与 child_process.spawn 同签名，但 Windows 上能正确处理 .cmd/.bat。 */
 const spawn = crossSpawn
@@ -45,11 +52,11 @@ const spawn = crossSpawn
 // 包内资源路径（在运行时根据 import.meta.url 解析自身位置）
 // ─────────────────────────────────────────────────────────────────────────
 
-/** 当前文件 src/index.ts 的目录 */
+/** 当前文件 src/opencode/index.ts 的目录 */
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-/** toolkit 包根目录（src 上一级） */
-const PKG_ROOT = path.resolve(__dirname, "..")
+/** toolkit 包根目录（src/opencode 上两级） */
+const PKG_ROOT = path.resolve(__dirname, "..", "..")
 
 /** 包内 agent 源目录 */
 const AGENTS_DIR = path.join(PKG_ROOT, "agents")
@@ -216,17 +223,6 @@ const LEGACY_RECURSION_GUARD = "SUBAGENT_RESUMER_REVIEWING"
 
 type LooseRecord = Record<string, any>
 
-type FileChange = { tool: string; path?: string; detail?: string }
-
-type Verdict = {
-  verdict: "complete" | "incomplete"
-  confidence: "high" | "medium" | "low"
-  reasons: string[]
-  missing: string[]
-  evidence: string[]
-  next_steps: string
-}
-
 const FILE_MOD_TOOLS = new Set(["write", "edit", "multiedit", "patch"])
 const SHELL_WRITE_RE =
   /\b(rm|mv|cp|touch|mkdir|chmod|chown|ln|tee|sed\s+-i|>>?|git\s+(add|rm|mv|reset|checkout|commit|push|stash|apply))\b/
@@ -246,11 +242,6 @@ function lastTextOf(message: LooseRecord | undefined): string {
     if (p?.type === "text" && typeof p.text === "string" && p.text.trim().length > 0) return p.text
   }
   return ""
-}
-
-function clip(text: string, max: number): string {
-  if (text.length <= max) return text
-  return text.slice(0, max) + `\n…(${text.length - max} chars truncated)`
 }
 
 function pickToolArgs(state: LooseRecord): LooseRecord {
@@ -324,155 +315,6 @@ function extractConversationTail(messages: LooseRecord[]): string {
     out.push(lines.join("\n"))
   }
   return clip(out.join("\n"), MAX_TAIL_TEXT)
-}
-
-/**
- * 组装审查员 prompt。章节标题与 task-completion-checker.md 的 system prompt
- * 严格对齐——审查员是按这些标题定位字段的。
- */
-function buildReviewerPrompt(input: {
-  description: string
-  subagentType: string
-  request: string
-  finalOutput: string
-  finishReason: string
-  errorInfo: string
-  fileChanges: FileChange[]
-  conversationTail: string
-}): string {
-  const fc =
-    input.fileChanges.length === 0
-      ? "（无文件改动记录）"
-      : input.fileChanges
-          .map((c, i) => {
-            const head = `${i + 1}. tool=${c.tool}` + (c.path ? ` path=${c.path}` : "")
-            return c.detail ? `${head}\n   detail: ${c.detail}` : head
-          })
-          .join("\n")
-
-  // 文件以 `## ORIGINAL_REQUEST` 开头是有意为之：审查员 agent 同时支持
-  // "INPUT_FILE <path>"（推荐）和"直接 inline 这段 markdown"两种输入形式，
-  // 后者用首行 `## ORIGINAL_REQUEST` 作为识别标志。
-  return [
-    "## ORIGINAL_REQUEST",
-    input.request || "(empty)",
-    "",
-    "## SUBAGENT_DESCRIPTION",
-    input.description || "(empty)",
-    "",
-    "## SUBAGENT_TYPE",
-    input.subagentType || "(empty)",
-    "",
-    "## FINISH_REASON",
-    input.finishReason || "(unknown)",
-    "",
-    "## ERROR_INFO",
-    input.errorInfo || "(none)",
-    "",
-    "## FINAL_OUTPUT",
-    input.finalOutput || "(empty)",
-    "",
-    "## FILE_CHANGES",
-    fc,
-    "",
-    "## CONVERSATION_TAIL",
-    input.conversationTail || "(empty)",
-  ].join("\n")
-}
-
-/**
- * 从审查员 stdout 文本里抽判决。
- *
- * 主路径：XML 标签格式（v0.2.5 起的协议）。
- * 兜底：旧的 JSON 格式（pre-v0.2.5 agent 的输出，或模型 hallucinate 回退到 JSON）。
- *
- * 为什么主路径换成 XML？
- *   LLM 生成 JSON 字符串值时频繁忘记转义内嵌引号——尤其中文模型在 reasons
- *   这种长描述里写 `"做完了"` 之类的强调引号，整段 JSON 就崩，JSON.parse
- *   失败、verdict=null、整个 review 链路废掉。XML 标签内的文本是字面量，
- *   引号 / 换行 / 单引号 / 中文标点全部宽容、零转义负担。
- */
-function extractVerdict(text: string): Verdict | null {
-  return extractVerdictXML(text) ?? extractVerdictJsonLegacy(text)
-}
-
-/**
- * 解析 XML 标签格式的判决（主路径）。
- *
- * 期望文本里至少有一组：
- *   <task_completion_review>
- *     <verdict>complete|incomplete</verdict>
- *     <confidence>high|medium|low</confidence>
- *     <reasons>- ...\n- ...</reasons>
- *     <missing>- ...</missing>
- *     <evidence>- ...</evidence>
- *     <next_steps>...</next_steps>
- *   </task_completion_review>
- *
- * 找不到块或 verdict 字段非法都返回 null（让调用方走 JSON 兜底）。
- */
-function extractVerdictXML(text: string): Verdict | null {
-  // 取最后一组 review 块（前面的分析文字可能也有"审查清单"等字眼但不会带这个标签）
-  const blocks = [...text.matchAll(/<task_completion_review>([\s\S]*?)<\/task_completion_review>/g)]
-  if (blocks.length === 0) return null
-  const block = blocks[blocks.length - 1][1]
-
-  const tagText = (tag: string): string => {
-    const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`))
-    return m ? m[1].trim() : ""
-  }
-
-  const tagList = (tag: string): string[] => {
-    const raw = tagText(tag)
-    if (!raw) return []
-    return raw
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0)
-      .map((l) => l.replace(/^[-*•]\s*/, ""))
-      .filter((l) => l.length > 0)
-  }
-
-  const verdict = tagText("verdict").toLowerCase()
-  if (verdict !== "complete" && verdict !== "incomplete") return null
-
-  const confidenceRaw = tagText("confidence").toLowerCase()
-  const confidence: Verdict["confidence"] =
-    confidenceRaw === "high" || confidenceRaw === "medium" || confidenceRaw === "low" ? confidenceRaw : "medium"
-
-  return {
-    verdict: verdict as "complete" | "incomplete",
-    confidence,
-    reasons: tagList("reasons"),
-    missing: tagList("missing"),
-    evidence: tagList("evidence"),
-    next_steps: tagText("next_steps"),
-  }
-}
-
-/**
- * 老 JSON 格式判决兜底（pre-v0.2.5 行为）。
- *
- * 顺序：fenced code block ```json ... ``` → 任意 balanced {...}。
- * 都从最后一个开始尝试解析。任何 JSON.parse 错误（包括内嵌引号未转义这类经典
- * LLM 错误）就放弃这条候选；都失败返回 null。
- */
-function extractVerdictJsonLegacy(text: string): Verdict | null {
-  const fences = [...text.matchAll(/```json\s*([\s\S]*?)```/g)]
-  for (let i = fences.length - 1; i >= 0; i--) {
-    try {
-      const v = JSON.parse(fences[i][1])
-      if (v && (v.verdict === "complete" || v.verdict === "incomplete")) return v as Verdict
-    } catch {}
-  }
-  const candidates = [...text.matchAll(/\{[\s\S]*?\}/g)]
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    try {
-      const v = JSON.parse(candidates[i][0])
-      if (v && (v.verdict === "complete" || v.verdict === "incomplete")) return v as Verdict
-    } catch {}
-  }
-  return null
 }
 
 /**
@@ -569,27 +411,6 @@ async function consultReviewer(
       fs.unlinkSync(tmpFile)
     } catch {}
   }
-}
-
-/**
- * 把审查员判决转成发回 subagent 的"续跑指令"。
- * 措辞硬性禁止三种偷懒模式：重复劳动 / 用总结代替执行 / 用提问拖延。
- */
-function buildContinuation(verdict: Verdict): string {
-  return [
-    "[task-completion-checker] 审核员判定你尚未完成任务。请认真处理：",
-    "",
-    "## 判定理由",
-    ...verdict.reasons.map((r) => `- ${r}`),
-    "",
-    "## 缺失/未完成项",
-    ...(verdict.missing.length > 0 ? verdict.missing.map((m) => `- ${m}`) : ["- (审核员未明确列出，但判定未完成)"]),
-    "",
-    "## 续跑指令",
-    verdict.next_steps?.trim() || "请从你停下的地方继续，把上面缺失项逐条做完，并在最终回复中明确指出每一项的完成情况。",
-    "",
-    "请直接继续执行，不要重新开始、不要总结之前的内容、不要再问问题。",
-  ].join("\n")
 }
 
 /**
