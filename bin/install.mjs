@@ -3,7 +3,7 @@
  * opencode-toolkit-install —— 一仓两宿主的命令行安装器（跨平台 Linux/macOS/Windows）。
  *
  * opencode（默认）：把 agents/*.md 铺到 <工程>/.opencode/agent/（symlink，Windows 降级 copy）。
- * Claude Code（--claude）：把 SubagentStop 审查/续跑 hook 合并进 <工程>/.claude/settings.json。
+ * Claude Code（--claude）：装 SubagentStop hook + 翻译分发 agents/skills 到 <工程>/.claude/{agents,skills}/。
  *
  * 用法：
  *   npx opencode-toolkit-install                       # opencode: 装 agent 到 cwd
@@ -21,10 +21,12 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { MARKER_PREFIX, translateAgent } from "./claude-assets.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PKG_ROOT = path.resolve(__dirname, "..")
 const AGENTS_SRC = path.join(PKG_ROOT, "agents")
+const SKILLS_SRC = path.join(PKG_ROOT, "skills")
 const PKG_VERSION = (() => {
   try {
     return JSON.parse(fs.readFileSync(path.join(PKG_ROOT, "package.json"), "utf8")).version
@@ -322,6 +324,117 @@ function uninstallClaudeHook(projectDir) {
   console.log(`[opencode-toolkit-install] removed ${removed} toolkit SubagentStop hook(s) from ${settingsPath}`)
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Claude agents：翻译 agents/*.md → <工程>/.claude/agents/（opencode frontmatter
+// → Claude frontmatter；详见 bin/claude-assets.mjs 的映射，含 task:allow → Agent）。
+// marker 在文件末尾，幂等覆盖自己生成的、不碰用户同名手写文件。
+// ─────────────────────────────────────────────────────────────────────────
+
+function installClaudeAgents(projectDir) {
+  const targetDir = path.join(projectDir, ".claude", "agents")
+  if (!fs.existsSync(AGENTS_SRC)) return { installed: 0, skipped: [] }
+  const files = fs.readdirSync(AGENTS_SRC).filter((f) => f.endsWith(".md"))
+  if (files.length === 0) {
+    console.warn(`  (agents/ 为空，无 agent 可装)`)
+    return { installed: 0, skipped: [] }
+  }
+  fs.mkdirSync(targetDir, { recursive: true })
+  let installed = 0
+  const skipped = []
+  const allWarnings = []
+  for (const file of files) {
+    const name = file.replace(/\.md$/, "")
+    const raw = fs.readFileSync(path.join(AGENTS_SRC, file), "utf8")
+    const { content, tools, warnings } = translateAgent(raw, name, file, PKG_VERSION)
+    allWarnings.push(...warnings)
+    const dst = path.join(targetDir, file)
+    if (fs.existsSync(dst) && !fs.readFileSync(dst, "utf8").includes(MARKER_PREFIX)) {
+      console.warn(`  ! ${file}  (skipped — 已存在且非 toolkit 生成，视为你手写的)`)
+      skipped.push(dst)
+      continue
+    }
+    fs.writeFileSync(dst, content)
+    console.log(`  + ${file}  (tools: ${tools ? tools.join(", ") || "(空)" : "继承全部"})`)
+    installed++
+  }
+  for (const w of allWarnings) console.warn(`  ⚠ ${w}`)
+  return { installed, skipped }
+}
+
+function uninstallClaudeAgents(projectDir) {
+  const targetDir = path.join(projectDir, ".claude", "agents")
+  if (!fs.existsSync(targetDir)) return { removed: 0 }
+  let removed = 0
+  for (const file of fs.readdirSync(targetDir).filter((f) => f.endsWith(".md"))) {
+    const dst = path.join(targetDir, file)
+    try {
+      if (fs.readFileSync(dst, "utf8").includes(MARKER_PREFIX)) {
+        fs.unlinkSync(dst)
+        console.log(`  - agents/${file}`)
+        removed++
+      }
+    } catch {}
+  }
+  return { removed }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Claude skills：拷贝 skills/<name>/ → <工程>/.claude/skills/<name>/。
+// SKILL.md 规范两宿主同源，无需翻译——整目录拷贝 + 在 SKILL.md 末尾打 marker。
+// ─────────────────────────────────────────────────────────────────────────
+
+function installClaudeSkills(projectDir) {
+  const targetRoot = path.join(projectDir, ".claude", "skills")
+  if (!fs.existsSync(SKILLS_SRC)) return { installed: 0, skipped: [] }
+  const dirs = fs
+    .readdirSync(SKILLS_SRC, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && fs.existsSync(path.join(SKILLS_SRC, e.name, "SKILL.md")))
+  if (dirs.length === 0) {
+    console.warn(`  (skills/ 下没有含 SKILL.md 的 skill，无可装)`)
+    return { installed: 0, skipped: [] }
+  }
+  fs.mkdirSync(targetRoot, { recursive: true })
+  let installed = 0
+  const skipped = []
+  for (const e of dirs) {
+    const name = e.name
+    const dstDir = path.join(targetRoot, name)
+    const dstSkill = path.join(dstDir, "SKILL.md")
+    if (fs.existsSync(dstSkill) && !fs.readFileSync(dstSkill, "utf8").includes(MARKER_PREFIX)) {
+      console.warn(`  ! ${name}/  (skipped — 已存在且非 toolkit 生成)`)
+      skipped.push(dstDir)
+      continue
+    }
+    fs.rmSync(dstDir, { recursive: true, force: true }) // 清掉上次我们装的，再整目录重拷
+    fs.cpSync(path.join(SKILLS_SRC, name), dstDir, { recursive: true })
+    const sk = fs.readFileSync(dstSkill, "utf8").replace(/\s*$/, "")
+    fs.writeFileSync(
+      dstSkill,
+      `${sk}\n\n${MARKER_PREFIX} from skills/${name}/ by opencode-toolkit@${PKG_VERSION} — reinstall 会覆盖 -->\n`,
+    )
+    console.log(`  + skills/${name}/`)
+    installed++
+  }
+  return { installed, skipped }
+}
+
+function uninstallClaudeSkills(projectDir) {
+  const targetRoot = path.join(projectDir, ".claude", "skills")
+  if (!fs.existsSync(targetRoot)) return { removed: 0 }
+  let removed = 0
+  for (const e of fs.readdirSync(targetRoot, { withFileTypes: true }).filter((x) => x.isDirectory())) {
+    const skillMd = path.join(targetRoot, e.name, "SKILL.md")
+    try {
+      if (fs.readFileSync(skillMd, "utf8").includes(MARKER_PREFIX)) {
+        fs.rmSync(path.join(targetRoot, e.name), { recursive: true, force: true })
+        console.log(`  - skills/${e.name}/`)
+        removed++
+      }
+    } catch {}
+  }
+  return { removed }
+}
+
 // ── argv 解析
 const args = process.argv.slice(2)
 const wantHelp = args.includes("--help") || args.includes("-h")
@@ -339,7 +452,7 @@ if (wantHelp) {
       "  opencode-toolkit-install [target-dir]",
       "  opencode-toolkit-install --uninstall [target-dir]",
       "",
-      "Claude Code：把 SubagentStop 审查/续跑 hook 合并进 <工程>/.claude/settings.json",
+      "Claude Code：装 SubagentStop hook + 翻译分发 agents → .claude/agents/ + skills → .claude/skills/",
       "  opencode-toolkit-install --claude [target-dir]",
       "  opencode-toolkit-install --claude --uninstall [target-dir]",
       "",
@@ -358,11 +471,22 @@ if (unknown) {
 
 if (claudeMode) {
   if (uninstall) {
-    console.log(`[opencode-toolkit-install] removing Claude Code SubagentStop hook from ${targetDir}/.claude/settings.json`)
+    console.log(`[opencode-toolkit-install] removing Claude Code adaptation from ${targetDir}/.claude/`)
     uninstallClaudeHook(targetDir)
+    const a = uninstallClaudeAgents(targetDir)
+    const s = uninstallClaudeSkills(targetDir)
+    console.log(`[opencode-toolkit-install] removed: hook + agents=${a.removed} skills=${s.removed}`)
   } else {
-    console.log(`[opencode-toolkit-install] installing Claude Code SubagentStop hook into ${targetDir}/.claude/settings.json`)
+    console.log(`[opencode-toolkit-install] installing Claude Code adaptation into ${targetDir}/.claude/`)
+    console.log(`  hook → .claude/settings.json`)
     installClaudeHook(targetDir)
+    console.log(`  agents → .claude/agents/  (从 opencode frontmatter 翻译)`)
+    const a = installClaudeAgents(targetDir)
+    console.log(`  skills → .claude/skills/`)
+    const s = installClaudeSkills(targetDir)
+    console.log(
+      `[opencode-toolkit-install] done. hook ✓  agents=${a.installed}(skip ${a.skipped.length})  skills=${s.installed}(skip ${s.skipped.length})`,
+    )
   }
 } else if (uninstall) {
   console.log(`[opencode-toolkit-install] uninstalling toolkit agents from ${targetDir}/.opencode/agent/`)

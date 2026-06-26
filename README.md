@@ -4,8 +4,8 @@
 
 - **opencode Plugin**：`tool.execute.after` 钩子上的 subagent 完成度审查 + 自动续跑
 - **Claude Code Hook**：`SubagentStop` 上的同款审查 + 续跑（见下文「Claude Code 接入」）
-- **Agents**（`agents/`）：审查员 agent `task-completion-checker`（两宿主共用同一正文）
-- **Skills**（`skills/`）：通过 `config.skills.paths` 注入到 opencode
+- **Agents**（`agents/`）：审查员 agent `task-completion-checker`。opencode symlink 到 `.opencode/agent/`；Claude Code 翻译 frontmatter（含 `task→Agent` 权限映射）后装到 `.claude/agents/`
+- **Skills**（`skills/`）：opencode 走 `config.skills.paths` 注入；Claude Code 拷贝到 `.claude/skills/`
 
 > 两个宿主在进程层面从不共存（opencode 走 `exports["./server"]`，Claude 走 `.claude/settings.json` 的 command hook），磁盘上只共享 `src/core/` 与包元数据。详见 `src/index.ts` 顶部的目录约定说明。
 
@@ -78,7 +78,7 @@ npm install opencode-toolkit          # 或 npm install github:wangbinquan/openc
 npm install /abs/path/to/opencode-toolkit
 ```
 
-**② 把 SubagentStop hook 幂等合并进 `<工程>/.claude/settings.json`**（不碰你已有的 hook）：
+**② 一条命令装齐 hook + agents + skills**（都幂等，不碰你已有的文件）：
 
 ```bash
 npx opencode-toolkit-install --claude
@@ -96,12 +96,34 @@ npx opencode-toolkit-install --claude
 }
 ```
 
-**③ 重启 Claude Code**（开新 session）让它读到新 hook；用 `/hooks` 可确认已注册。
+上面的 JSON 是它写入的 **hook** 部分。同一条命令还顺手装了：
 
-卸载：`npx opencode-toolkit-install --claude --uninstall`（只删自己那条，保留你的其它 hook）。
+- **agents** → 把 `agents/*.md` 翻译 frontmatter 后写到 `.claude/agents/`（详见下「agent / skill 翻译细节」）
+- **skills** → 把 `skills/*/` 整目录拷到 `.claude/skills/`
+
+生成的 agent/skill 都带末尾 marker：重装只覆盖自己生成的、**不碰你手写的同名文件**。
+
+**③ 重启 Claude Code**（开新 session）让它读到新 hook 与 agents；用 `/hooks`、`/agents` 可确认。
+
+卸载：`npx opencode-toolkit-install --claude --uninstall`（只删 toolkit 自己装的 hook/agents/skills，保留你手写的）。
 
 > 纯本地调试、不想装进工程也行：先在 checkout 里 `npm install` 拉到 `cross-spawn`，再
 > `node /abs/path/to/opencode-toolkit/bin/install.mjs --claude /path/to/你的工程`——hook 命令会指向 checkout 里的 `src/claude/hook.mjs`。
+
+### agent / skill 翻译细节
+
+`--claude` 把 opencode agent 的 frontmatter 翻成 Claude 的（实现见 `bin/claude-assets.mjs`）：
+
+| opencode frontmatter | Claude frontmatter |
+|---|---|
+| `permission: task: allow` | `tools:` 含 `Agent` → 该 subagent **可再起 subagent**（≤5 层） |
+| `permission: task: deny` | `tools:` 不含 `Agent` → 不能派生 |
+| `read/edit/write/bash/glob/grep/webfetch/websearch: allow` | 对应 `Read / Edit+MultiEdit / Write / Bash / Glob / Grep / WebFetch / WebSearch` 进 `tools:` 白名单；`deny` 的不列 |
+| 无 `permission:` 块 | 不写 `tools:` = Claude 继承全部工具 |
+| `mode` / `temperature` | 无 Claude 对等，丢弃 |
+| `description` | 直接搬（Claude 用它做自动委派） |
+
+局限：opencode 的 bash 细粒度白名单（`"git diff*": allow` 之类）Claude 的 agent `tools` 表达不了，只要 bash 有任一 allow 就授予整个 `Bash`。skill 是整目录拷贝、不翻译（`SKILL.md` 规范两宿主同源）。
 
 ### 工作机制
 
