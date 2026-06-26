@@ -1,5 +1,5 @@
 /**
- * opencode-toolkit —— opencode 宿主入口 barrel。
+ * harness-toolkit —— opencode 宿主入口 barrel。
  *
  * package.json 的 `exports["./server"]`（与 `.`）指向这里——opencode 加载 toolkit
  * 时第一个执行的就是本文件 re-export 的 default Plugin 工厂（实现在

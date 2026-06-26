@@ -1,4 +1,4 @@
-# opencode-toolkit
+# harness-toolkit
 
 团队共享工具包，核心能力是 **subagent 任务完成度审查 + 自动续跑**。**一仓两宿主**——同一份审查逻辑（`src/core/`）既作 [opencode](https://opencode.ai) 插件、也作 [Claude Code](https://claude.com/claude-code) hook。跨平台支持 **Linux / macOS / Windows**：
 
@@ -16,19 +16,19 @@
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.3.1"]
+  "plugin": ["harness-toolkit@github:wangbinquan/harness-toolkit#v0.3.1"]
 }
 ```
 
-> ⚠️ **必须用 `<包名>@<spec>` 形式**，不能写成纯 `"github:wangbinquan/opencode-toolkit#v0.1.1"`。
+> ⚠️ **必须用 `<包名>@<spec>` 形式**，不能写成纯 `"github:wangbinquan/harness-toolkit#v0.1.1"`。
 > opencode 用 `npm-package-arg` 解析 spec 取 `name` 字段，github 简写形式 `name` 字段为 null，会让 opencode 把整段 spec 当包名去 `node_modules/<整段 spec>/` 里找入口，必然 ENOENT。
-> 加上 `opencode-toolkit@` 前缀让 npa 正确解析，npm/arborist 仍按 github URL 拉代码并装到 `node_modules/opencode-toolkit/`。
+> 加上 `harness-toolkit@` 前缀让 npa 正确解析，npm/arborist 仍按 github URL 拉代码并装到 `node_modules/harness-toolkit/`。
 
 也支持：
 
-- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.3.1"`
-- 私有 npm registry：`"@your-scope/opencode-toolkit"`（先在 `.npmrc` 配 scope registry）
-- 本地路径（开发期）：`"file:///abs/path/to/opencode-toolkit"`
+- 私有 git URL：`"harness-toolkit@git+ssh://git@your.git/...#v0.3.1"`
+- 私有 npm registry：`"@your-scope/harness-toolkit"`（先在 `.npmrc` 配 scope registry）
+- 本地路径（开发期）：`"file:///abs/path/to/harness-toolkit"`
 
 ### 2. 启动两次 opencode（首次自动安装 agent，第二次开始可用）
 
@@ -37,7 +37,7 @@
 如果你不想等两次启动，可以在配置插件之后、第一次启动之前手动跑一次（要求工程内已经有过任意一次 opencode 启动让 toolkit 进入 cache，否则 npx 找不到包）：
 
 ```bash
-npx opencode-toolkit-install
+npx harness-toolkit-install
 ```
 
 接入完成后，新的 opencode 启动时若配置 spec 仍是相同字符串（同 tag）→ 走缓存，无操作；改成新 tag → 重装、agent symlink 自动指向新版本。
@@ -73,15 +73,15 @@ npx opencode-toolkit-install
 ```bash
 cd /path/to/你的工程
 # 发布后：从 npm 或 github 装
-npm install opencode-toolkit          # 或 npm install github:wangbinquan/opencode-toolkit#vX.Y.Z
+npm install harness-toolkit          # 或 npm install github:wangbinquan/harness-toolkit#vX.Y.Z
 # 未发布 / 本地开发：用本地 checkout 路径装
-npm install /abs/path/to/opencode-toolkit
+npm install /abs/path/to/harness-toolkit
 ```
 
 **② 一条命令装齐 hook + agents + skills**（都幂等，不碰你已有的文件）：
 
 ```bash
-npx opencode-toolkit-install --claude
+npx harness-toolkit-install --claude
 ```
 
 写入内容（保留你的其它配置）：
@@ -90,7 +90,7 @@ npx opencode-toolkit-install --claude
 {
   "hooks": {
     "SubagentStop": [
-      { "hooks": [ { "type": "command", "command": "node \"<abs>/node_modules/opencode-toolkit/src/claude/hook.mjs\"", "timeout": 600 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"<abs>/node_modules/harness-toolkit/src/claude/hook.mjs\"", "timeout": 600 } ] }
     ]
   }
 }
@@ -105,10 +105,10 @@ npx opencode-toolkit-install --claude
 
 **③ 重启 Claude Code**（开新 session）让它读到新 hook 与 agents；用 `/hooks`、`/agents` 可确认。
 
-卸载：`npx opencode-toolkit-install --claude --uninstall`（只删 toolkit 自己装的 hook/agents/skills，保留你手写的）。
+卸载：`npx harness-toolkit-install --claude --uninstall`（只删 toolkit 自己装的 hook/agents/skills，保留你手写的）。
 
 > 纯本地调试、不想装进工程也行：先在 checkout 里 `npm install` 拉到 `cross-spawn`，再
-> `node /abs/path/to/opencode-toolkit/bin/install.mjs --claude /path/to/你的工程`——hook 命令会指向 checkout 里的 `src/claude/hook.mjs`。
+> `node /abs/path/to/harness-toolkit/bin/install.mjs --claude /path/to/你的工程`——hook 命令会指向 checkout 里的 `src/claude/hook.mjs`。
 
 ### agent / skill 翻译细节
 
@@ -179,16 +179,16 @@ npx opencode-toolkit-install --claude
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `OPENCODE_TOOLKIT_MAX_RETRIES` | `3` | 续跑次数上限 |
-| `OPENCODE_TOOLKIT_REVIEWER_AGENT` | `task-completion-checker` | 审查员 agent 名 |
-| `OPENCODE_TOOLKIT_OPENCODE_BIN` | `opencode` | opencode 可执行文件路径 |
-| `OPENCODE_TOOLKIT_TIMEOUT_MS` | `180000` | 单次审查超时 |
-| `OPENCODE_TOOLKIT_TAIL_MESSAGES` | `6` | 传给审查员的会话尾部消息条数 |
-| `OPENCODE_TOOLKIT_TMP_DIR` | （自动选） | 审查员 prompt 临时文件的目录。默认按 `<工程>/.opencode/.toolkit-tmp/` → `os.tmpdir()` → `~/.opencode-toolkit-tmp/` 顺序探测可写目录（项目内优先，避免审查员 read 触发 external_directory 权限询问）；只在特殊环境需要显式指定 |
-| `OPENCODE_TOOLKIT_REVIEWER_MODEL` | （继承 opencode 默认） | 审查员调用 `opencode run --agent` 时附加 `--model <value>`，格式 `provider/model`，例如 `anthropic/claude-haiku-4-5-20251001`。优先级高于 `opencode.json` 的 plugin options |
-| `OPENCODE_TOOLKIT_REVIEWER_VARIANT` | （继承 opencode 默认） | 附加 `--variant <value>`（reasoning 努力度，常见值 `high` / `medium` / `low` / `minimal`） |
+| `HARNESS_TOOLKIT_MAX_RETRIES` | `3` | 续跑次数上限 |
+| `HARNESS_TOOLKIT_REVIEWER_AGENT` | `task-completion-checker` | 审查员 agent 名 |
+| `HARNESS_TOOLKIT_OPENCODE_BIN` | `opencode` | opencode 可执行文件路径 |
+| `HARNESS_TOOLKIT_TIMEOUT_MS` | `180000` | 单次审查超时 |
+| `HARNESS_TOOLKIT_TAIL_MESSAGES` | `6` | 传给审查员的会话尾部消息条数 |
+| `HARNESS_TOOLKIT_TMP_DIR` | （自动选） | 审查员 prompt 临时文件的目录。默认按 `<工程>/.opencode/.toolkit-tmp/` → `os.tmpdir()` → `~/.harness-toolkit-tmp/` 顺序探测可写目录（项目内优先，避免审查员 read 触发 external_directory 权限询问）；只在特殊环境需要显式指定 |
+| `HARNESS_TOOLKIT_REVIEWER_MODEL` | （继承 opencode 默认） | 审查员调用 `opencode run --agent` 时附加 `--model <value>`，格式 `provider/model`，例如 `anthropic/claude-haiku-4-5-20251001`。优先级高于 `opencode.json` 的 plugin options |
+| `HARNESS_TOOLKIT_REVIEWER_VARIANT` | （继承 opencode 默认） | 附加 `--variant <value>`（reasoning 努力度，常见值 `high` / `medium` / `low` / `minimal`） |
 
-兼容旧名 `SUBAGENT_RESUMER_*`。
+旧名仍兼容：按 `HARNESS_TOOLKIT_*` → `OPENCODE_TOOLKIT_*`（前 opencode-toolkit 时期）→ `SUBAGENT_RESUMER_*`（更早 demo）顺序回退，已设旧名的无需改动。
 
 ## 自定义审查员模型
 
@@ -203,7 +203,7 @@ npx opencode-toolkit-install --claude
   "$schema": "https://opencode.ai/config.json",
   "model": "anthropic/claude-sonnet-4-6",
   "plugin": [
-    ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.3.1", {
+    ["harness-toolkit@github:wangbinquan/harness-toolkit#v0.3.1", {
       "reviewerModel": "anthropic/claude-haiku-4-5-20251001",
       "reviewerVariant": "minimal"
     }]
@@ -221,15 +221,15 @@ npx opencode-toolkit-install --claude
 ### 2. 环境变量（per-shell 临时覆盖）
 
 ```bash
-export OPENCODE_TOOLKIT_REVIEWER_MODEL="anthropic/claude-haiku-4-5-20251001"
-export OPENCODE_TOOLKIT_REVIEWER_VARIANT="minimal"
+export HARNESS_TOOLKIT_REVIEWER_MODEL="anthropic/claude-haiku-4-5-20251001"
+export HARNESS_TOOLKIT_REVIEWER_VARIANT="minimal"
 ```
 
 优先级**高于** plugin options，适合临时实验、A/B 成本对比。
 
 ### 3. fork agent 文件（完全控制，不推荐做团队默认）
 
-复制 `node_modules/opencode-toolkit/agents/task-completion-checker.md` 到 `<工程>/.opencode/agent/`，删除 toolkit 创建的 symlink，用你的拷贝替代，frontmatter 自己改：
+复制 `node_modules/harness-toolkit/agents/task-completion-checker.md` 到 `<工程>/.opencode/agent/`，删除 toolkit 创建的 symlink，用你的拷贝替代，frontmatter 自己改：
 
 ```yaml
 ---
@@ -249,20 +249,20 @@ permission:
 |---|---|---|
 | Plugin | opencode `Npm.add` 安装包，按 `exports["./server"]` 加载 | 当次启动 |
 | Skill | 插件 `config` 钩子把包内 `skills/` 注入 `config.skills.paths`；opencode 的 skill 服务惰性扫描该列表 | 当次启动 |
-| Agent | 插件 factory 把 `agents/*.md` symlink 到 `<工程>/.opencode/agent/`；opencode 配置启动期扫描该目录 | **下次**启动（或先跑 `npx opencode-toolkit-install`） |
+| Agent | 插件 factory 把 `agents/*.md` symlink 到 `<工程>/.opencode/agent/`；opencode 配置启动期扫描该目录 | **下次**启动（或先跑 `npx harness-toolkit-install`） |
 
 ## 自动更新
 
 - Plugin 代码：`pnpm update` 或 opencode 启动时 `npmSvc.install` 后台拉最新
 - Skill 内容：路径常驻，包升级文件就升级（symlink 也行，directly path 也行）
-- Agent 内容：symlink 永远指向 `node_modules/opencode-toolkit/agents/<file>.md`，包升级 → symlink 指向的真实文件升级 → 内容自动跟新（symlink 落地在工程不需重建）
+- Agent 内容：symlink 永远指向 `node_modules/harness-toolkit/agents/<file>.md`，包升级 → symlink 指向的真实文件升级 → 内容自动跟新（symlink 落地在工程不需重建）
 
 工程的 `.opencode/agent/<name>.md` 已经存在为**普通文件**（不是 symlink）→ 视为团队成员自己写的同名 agent，**不覆盖**，并 warn 报告冲突。
 
 ## 卸载
 
 ```bash
-npx opencode-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 symlink
+npx harness-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 symlink
 ```
 
 之后从 `opencode.json` 里去掉 `plugin` 项即可。
@@ -273,14 +273,14 @@ npx opencode-toolkit-install --uninstall   # 仅删 toolkit 自己创建的 syml
 
 v0.2.0 之前的版本在 Windows 上跑 `opencode.cmd` 时 `child_process.spawn` 会被 Node 18.20+/20.12+ 的 CVE 修复拒绝；同时 symlink 默认在 Windows 上需要管理员/Developer Mode 权限。
 
-升级到 v0.2.6+ 即可。spec 改成 `"opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.6"`，重启 opencode。
+升级到 v0.2.6+ 即可。spec 改成 `"harness-toolkit@github:wangbinquan/harness-toolkit#v0.2.6"`，重启 opencode。
 
 ### 报错 "no parseable JSON verdict"（v0.2.4 及之前）
 
 **症状**：reviewer 子进程跑完了、生成了完整内容（log 里能看到正常的 message.part.delta 和 step-finish），但插件主进程 stderr 报：
 
 ```
-[opencode-toolkit] reviewer exit=0, no parseable JSON verdict
+[harness-toolkit] reviewer exit=0, no parseable JSON verdict
   stdout tail: ...
 ```
 
@@ -330,14 +330,14 @@ v0.2.6 起把候选顺序里**项目内目录提到 `os.tmpdir()` 之前**：默
 
 v0.2.1 ~ v0.2.6 在 `os.tmpdir()` 单点不可写时直接放弃审查（受限的企业 Windows 把 `%TEMP%` 改到只读路径、只读容器 /tmp、用户 perm 错乱都可能触发）。
 
-v0.2.6 起会按候选链探测可写目录：`OPENCODE_TOOLKIT_TMP_DIR` → `os.tmpdir()` → `<工程>/.opencode/.toolkit-tmp/` → `~/.opencode-toolkit-tmp/`，第一个能 mkdir + 写探针 + 删除的就用。基本不会再撞这个问题。
+v0.2.6 起会按候选链探测可写目录：`HARNESS_TOOLKIT_TMP_DIR` → `os.tmpdir()` → `<工程>/.opencode/.toolkit-tmp/` → `~/.harness-toolkit-tmp/`，第一个能 mkdir + 写探针 + 删除的就用。基本不会再撞这个问题。
 
 如果运行时仍然看到 `WARNING: no writable tmp dir found. Tried in order: ...` 的提示，意味着这四个候选都不可写。修法：
 
 ```bash
 # 显式指定一个保证能写的绝对路径
-export OPENCODE_TOOLKIT_TMP_DIR="$HOME/some/dir"   # Linux/macOS
-setx OPENCODE_TOOLKIT_TMP_DIR "C:\path\to\dir"     # Windows（永久）
+export HARNESS_TOOLKIT_TMP_DIR="$HOME/some/dir"   # Linux/macOS
+setx HARNESS_TOOLKIT_TMP_DIR "C:\path\to\dir"     # Windows（永久）
 ```
 
 升级到 v0.2.6 即可。
@@ -377,11 +377,11 @@ ls -t ~/.local/share/opencode/log/ | head -1 \
   | xargs -I{} grep -E "plugin|toolkit" ~/.local/share/opencode/log/{}
 ```
 
-修复：把 spec 改成 `"opencode-toolkit@github:user/repo#tag"`，然后清掉错装的缓存：
+修复：把 spec 改成 `"harness-toolkit@github:user/repo#tag"`，然后清掉错装的缓存：
 
 ```bash
-rm -rf "$HOME/.cache/opencode/packages/github:"*opencode-toolkit*
-rm -rf "$HOME/.cache/opencode/packages/opencode-toolkit"*  # 同时清理可能存在的命名版本残留
+rm -rf "$HOME/.cache/opencode/packages/github:"*harness-toolkit*
+rm -rf "$HOME/.cache/opencode/packages/harness-toolkit"*  # 同时清理可能存在的命名版本残留
 # 工程里若有错版残留也一并清掉：
 rm -rf <工程>/.opencode/{node_modules,package-lock.json,package.json}
 rm -f <工程>/.opencode/agent/task-completion-checker.md  # 旧 symlink 指向已删的 cache
@@ -403,7 +403,7 @@ v0.2.6 起完整支持 **Linux / macOS / Windows**：
 | agent 文件分发 | symlink（toolkit 升级即文件升级） | 普通用户无 symlink 权限时自动降级为 copy |
 | copy 模式下的升级 | 不涉及 | marker 文件记 `srcHash`，下次安装用 hash 判定"是 toolkit 上次写的" vs "用户改过的"，前者自动覆盖、后者保留 |
 
-Windows 用户也能像 Linux/macOS 一样**自动获得 toolkit 升级**——不再需要每次 toolkit bump 后手动重跑 `npx opencode-toolkit-install`（plugin factory 启动时会自动检测并刷新 copy）。
+Windows 用户也能像 Linux/macOS 一样**自动获得 toolkit 升级**——不再需要每次 toolkit bump 后手动重跑 `npx harness-toolkit-install`（plugin factory 启动时会自动检测并刷新 copy）。
 
 如果 Windows 用户开启了 Developer Mode（`Settings → Update & Security → For developers`），`fs.symlinkSync` 也能成功，会走和 Linux/macOS 一样的 symlink 路径，体验完全一致。
 
@@ -433,7 +433,7 @@ npm publish --access public
 ## 目录结构
 
 ```
-opencode-toolkit/
+harness-toolkit/
 ├── package.json              # exports."./server" + bin
 ├── README.md
 ├── src/

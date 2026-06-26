@@ -11,7 +11,7 @@
  *
  * Marker 文件
  * ───────────
- * 写在 `<工程>/.opencode/agent/.opencode-toolkit.json`，结构：
+ * 写在 `<工程>/.opencode/agent/.harness-toolkit.json`，结构：
  *   {
  *     "version": "0.2.0",                  // 上次安装的 toolkit 版本（仅供查阅）
  *     "files": {
@@ -33,14 +33,17 @@
  * ────
  * agent 在 opencode 配置启动期被扫描（早于 plugin load）。所以 plugin factory
  * 里第一次跑时写出来的 agent 对**当次启动**看不见，要**下次**启动才能扫到。
- * 想消除这一启动延迟，先跑一次 `npx opencode-toolkit-install`。
+ * 想消除这一启动延迟，先跑一次 `npx harness-toolkit-install`。
  */
 
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
-const MARKER_FILE = ".opencode-toolkit.json"
+const MARKER_FILE = ".harness-toolkit.json"
+
+/** 旧版本（opencode-toolkit）写的 marker 文件名——升级时仍识别既有安装，避免把已装 agent 误判为冲突。 */
+const LEGACY_MARKER_FILES = [".opencode-toolkit.json"]
 
 /** marker 文件的 schema */
 type Marker = {
@@ -67,19 +70,29 @@ function sha256OfFile(filepath: string): string {
 
 /** 读 marker，缺失或损坏返回空白结构。 */
 function readMarker(targetDir: string): Marker {
-  const markerPath = path.join(targetDir, MARKER_FILE)
-  try {
-    const data = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Marker
-    if (!data.files || typeof data.files !== "object") return { version: "0.0.0", files: {} }
-    return data
-  } catch {
-    return { version: "0.0.0", files: {} }
+  // 先读新 marker，找不到再回退旧名（opencode-toolkit 时期），实现平滑升级
+  for (const name of [MARKER_FILE, ...LEGACY_MARKER_FILES]) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(targetDir, name), "utf8")) as Marker
+      if (data.files && typeof data.files === "object") return data
+    } catch {
+      // 试下一个候选
+    }
   }
+  return { version: "0.0.0", files: {} }
 }
 
 /** 写 marker。pretty-print 让人能直接读。 */
 function writeMarker(targetDir: string, marker: Marker): void {
   fs.writeFileSync(path.join(targetDir, MARKER_FILE), JSON.stringify(marker, null, 2) + "\n")
+  // 迁移：写了新 marker 后删掉旧名残留，避免两份并存
+  for (const name of LEGACY_MARKER_FILES) {
+    try {
+      fs.unlinkSync(path.join(targetDir, name))
+    } catch {
+      // 不存在即可
+    }
+  }
 }
 
 /**
@@ -153,7 +166,7 @@ export function installAgents(
     if (!lstat) {
       const kind = writeLinkOrCopy(src, dst)
       marker.files[file] = kind === "copy" ? { kind, srcHash: sha256OfFile(src) } : { kind }
-      logger(`[opencode-toolkit] installed agent: ${file} (${kind})`)
+      logger(`[harness-toolkit] installed agent: ${file} (${kind})`)
       result.installed++
       continue
     }
@@ -176,7 +189,7 @@ export function installAgents(
       } catch {}
       const kind = writeLinkOrCopy(src, dst)
       marker.files[file] = kind === "copy" ? { kind, srcHash: sha256OfFile(src) } : { kind }
-      logger(`[opencode-toolkit] updated agent: ${file} (relinked, ${kind})`)
+      logger(`[harness-toolkit] updated agent: ${file} (relinked, ${kind})`)
       result.installed++
       continue
     }
@@ -202,7 +215,7 @@ export function installAgents(
       // 4c：toolkit 写的 copy，src 已升级 → 重写
       fs.copyFileSync(src, dst)
       marker.files[file] = { kind: "copy", srcHash: newHash }
-      logger(`[opencode-toolkit] updated agent: ${file} (copy refreshed)`)
+      logger(`[harness-toolkit] updated agent: ${file} (copy refreshed)`)
       result.installed++
       continue
     }
@@ -257,14 +270,14 @@ export function uninstallAgents(
       if (currentHash !== (entry.srcHash ?? "")) {
         // 用户改过 → 不删
         preserved.push(dst)
-        logger(`[opencode-toolkit] preserved (user-edited): ${file}`)
+        logger(`[harness-toolkit] preserved (user-edited): ${file}`)
         continue
       }
     }
 
     try {
       fs.unlinkSync(dst)
-      logger(`[opencode-toolkit] removed agent: ${file}`)
+      logger(`[harness-toolkit] removed agent: ${file}`)
       removed++
     } catch {}
   }

@@ -17,7 +17,15 @@
 
 /** 生成文件的标记（放在文件末尾的 HTML 注释，不影响 frontmatter / 正文）。
  *  用于：reinstall 幂等覆盖、uninstall 只删自己生成的、不碰用户手写的同名文件。 */
-export const MARKER_PREFIX = "<!-- opencode-toolkit:generated"
+export const MARKER_PREFIX = "<!-- harness-toolkit:generated"
+
+/** 旧版本（opencode-toolkit）生成文件用的 marker 前缀——升级时仍能识别/覆盖/卸载既有生成物。 */
+export const LEGACY_MARKER_PREFIXES = ["<!-- opencode-toolkit:generated"]
+
+/** 文本是否由本 toolkit（任一版本）生成。 */
+export function isGeneratedByToolkit(text) {
+  return text.includes(MARKER_PREFIX) || LEGACY_MARKER_PREFIXES.some((p) => text.includes(p))
+}
 
 /** opencode permission key → Claude 工具名。edit/patch 都映射到 Edit 家族。 */
 const PERM_TO_TOOLS = [
@@ -141,7 +149,7 @@ export function translateAgent(raw, name, srcFile, pkgVersion) {
   if (model) head.push(`model: ${model}`)
   head.push("---")
 
-  const marker = `${MARKER_PREFIX} from agents/${srcFile} by opencode-toolkit@${pkgVersion} — reinstall 会覆盖，勿手改 -->`
+  const marker = `${MARKER_PREFIX} from agents/${srcFile} by harness-toolkit@${pkgVersion} — reinstall 会覆盖，勿手改 -->`
   const content = `${head.join("\n")}\n\n${body.trim()}\n\n${marker}\n`
   return { content, tools, warnings }
 }

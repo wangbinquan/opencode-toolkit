@@ -1,10 +1,10 @@
 /**
- * opencode-toolkit —— 团队共享 opencode 工具包
+ * harness-toolkit —— 团队共享 opencode 工具包
  *
  * 这个包同时承载三类资产并保证它们能被 opencode 自动加载：
  *
  *   1. Plugin 本体：
- *      团队成员在工程 opencode.json 里声明 `"plugin": ["opencode-toolkit"]`，
+ *      团队成员在工程 opencode.json 里声明 `"plugin": ["harness-toolkit"]`，
  *      opencode 通过 npm 解析装载此包，然后调用本文件导出的 default Plugin
  *      工厂函数。
  *
@@ -12,7 +12,7 @@
  *      opencode 不会扫描 npm 包路径，所以本插件在 factory 入口处把包内 agent
  *      文件 symlink/copy 到工程 .opencode/agent/。effect 在**下一次** opencode
  *      启动时生效（agent 在 plugin load 之前就被扫描了，无法做到一次启动即用）。
- *      想消除这一启动延迟可手动跑 `npx opencode-toolkit-install`。
+ *      想消除这一启动延迟可手动跑 `npx harness-toolkit-install`。
  *
  *   3. Skills（skills/*** /SKILL.md）：
  *      opencode 支持 `config.skills.paths` 让用户指任意目录里的 skill。本插件
@@ -78,25 +78,25 @@ const PKG_VERSION: string = (() => {
 // ─────────────────────────────────────────────────────────────────────────
 
 /** 续跑循环最大次数 */
-const MAX_RETRIES = Number(process.env.OPENCODE_TOOLKIT_MAX_RETRIES ?? process.env.SUBAGENT_RESUMER_MAX_RETRIES ?? 3)
+const MAX_RETRIES = Number(process.env.HARNESS_TOOLKIT_MAX_RETRIES ?? process.env.OPENCODE_TOOLKIT_MAX_RETRIES ?? process.env.SUBAGENT_RESUMER_MAX_RETRIES ?? 3)
 
 /** 审查员 agent 名（必须能被 `opencode run --agent <name>` 找到） */
 const REVIEWER_AGENT =
-  process.env.OPENCODE_TOOLKIT_REVIEWER_AGENT ??
+  process.env.HARNESS_TOOLKIT_REVIEWER_AGENT ?? process.env.OPENCODE_TOOLKIT_REVIEWER_AGENT ??
   process.env.SUBAGENT_RESUMER_REVIEWER_AGENT ??
   "task-completion-checker"
 
 /** opencode 可执行文件路径 */
-const OPENCODE_BIN = process.env.OPENCODE_TOOLKIT_OPENCODE_BIN ?? process.env.SUBAGENT_RESUMER_OPENCODE_BIN ?? "opencode"
+const OPENCODE_BIN = process.env.HARNESS_TOOLKIT_OPENCODE_BIN ?? process.env.OPENCODE_TOOLKIT_OPENCODE_BIN ?? process.env.SUBAGENT_RESUMER_OPENCODE_BIN ?? "opencode"
 
 /** 一次审查最长等待时间（毫秒） */
 const REVIEWER_TIMEOUT_MS = Number(
-  process.env.OPENCODE_TOOLKIT_TIMEOUT_MS ?? process.env.SUBAGENT_RESUMER_TIMEOUT_MS ?? 180_000,
+  process.env.HARNESS_TOOLKIT_TIMEOUT_MS ?? process.env.OPENCODE_TOOLKIT_TIMEOUT_MS ?? process.env.SUBAGENT_RESUMER_TIMEOUT_MS ?? 180_000,
 )
 
 /** 传给审查员的会话尾部消息条数 */
 const TAIL_MESSAGES = Number(
-  process.env.OPENCODE_TOOLKIT_TAIL_MESSAGES ?? process.env.SUBAGENT_RESUMER_TAIL_MESSAGES ?? 6,
+  process.env.HARNESS_TOOLKIT_TAIL_MESSAGES ?? process.env.OPENCODE_TOOLKIT_TAIL_MESSAGES ?? process.env.SUBAGENT_RESUMER_TAIL_MESSAGES ?? 6,
 )
 
 /** CONVERSATION_TAIL 整体字符上限 */
@@ -110,7 +110,7 @@ const MAX_TOOL_DETAIL = 400
  * Windows、只读容器 /tmp、用户 perm 错乱），团队成员可以指一个保证可写的
  * 目录绕开。
  */
-const TMP_DIR_OVERRIDE = process.env.OPENCODE_TOOLKIT_TMP_DIR
+const TMP_DIR_OVERRIDE = process.env.HARNESS_TOOLKIT_TMP_DIR ?? process.env.OPENCODE_TOOLKIT_TMP_DIR
 
 /** 选中的临时目录缓存——一次会话内只 probe 一次。 */
 let cachedTmpDir: string | null = null
@@ -126,10 +126,10 @@ let cachedTmpDir: string | null = null
  * 下，read 走 within-project 路径，匹配 `read: *: allow` 直接通过。
  *
  * 候选顺序（短路返回第一个可写的）：
- *   1. 环境变量 OPENCODE_TOOLKIT_TMP_DIR（显式覆盖）
+ *   1. 环境变量 HARNESS_TOOLKIT_TMP_DIR（显式覆盖）
  *   2. <工程>/.opencode/.toolkit-tmp/（项目内 → 不触发 external_directory）
  *   3. os.tmpdir()（系统默认；触发权限提示，但有些场景仍要用）
- *   4. ~/.opencode-toolkit-tmp/（家目录兜底）
+ *   4. ~/.harness-toolkit-tmp/（家目录兜底）
  *
  * Probe 方式：mkdirSync({recursive:true}) → 写一个 0 字节探针 → 立即 unlink。
  * 任一步抛错就跳到下一个候选。全部失败时返回最后一个候选并 warn——后续真实
@@ -143,7 +143,7 @@ function chooseTmpDir(projectDir: string): string {
   if (TMP_DIR_OVERRIDE) candidates.push(TMP_DIR_OVERRIDE)
   candidates.push(projectInternal)
   candidates.push(os.tmpdir())
-  candidates.push(path.join(os.homedir(), ".opencode-toolkit-tmp"))
+  candidates.push(path.join(os.homedir(), ".harness-toolkit-tmp"))
 
   for (const dir of candidates) {
     try {
@@ -168,9 +168,9 @@ function chooseTmpDir(projectDir: string): string {
   }
 
   console.error(
-    `[opencode-toolkit] WARNING: no writable tmp dir found. Tried in order: ${candidates.join(
+    `[harness-toolkit] WARNING: no writable tmp dir found. Tried in order: ${candidates.join(
       " | ",
-    )}. Set OPENCODE_TOOLKIT_TMP_DIR to a known-writable absolute path to fix.`,
+    )}. Set HARNESS_TOOLKIT_TMP_DIR to a known-writable absolute path to fix.`,
   )
   cachedTmpDir = candidates[candidates.length - 1]
   return cachedTmpDir
@@ -191,7 +191,7 @@ function sweepStaleTmpFiles(projectDir: string): void {
   }
   const now = Date.now()
   for (const name of entries) {
-    if (!name.startsWith("opencode-toolkit-reviewer-")) continue
+    if (!name.startsWith("harness-toolkit-reviewer-")) continue
     const filepath = path.join(dir, name)
     try {
       const stat = fs.statSync(filepath)
@@ -212,10 +212,10 @@ function sweepStaleTmpFiles(projectDir: string): void {
  *
  * 解决：spawn 时注入此环境变量；插件入口检测到就直接 no-op。
  */
-const RECURSION_GUARD = "OPENCODE_TOOLKIT_REVIEWING"
+const RECURSION_GUARD = "HARNESS_TOOLKIT_REVIEWING"
 
-// 兼容旧环境变量名（demo 阶段用过 SUBAGENT_RESUMER_*）
-const LEGACY_RECURSION_GUARD = "SUBAGENT_RESUMER_REVIEWING"
+// 兼容旧哨兵 env 名：opencode-toolkit 时期的 OPENCODE_TOOLKIT_REVIEWING、更早 demo 的 SUBAGENT_RESUMER_REVIEWING
+const LEGACY_RECURSION_GUARDS = ["OPENCODE_TOOLKIT_REVIEWING", "SUBAGENT_RESUMER_REVIEWING"]
 
 // ─────────────────────────────────────────────────────────────────────────
 // 类型 + 工具方法
@@ -351,15 +351,15 @@ async function consultReviewer(
   const tmpDir = chooseTmpDir(cwd)
   const tmpFile = path.join(
     tmpDir,
-    `opencode-toolkit-reviewer-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}.md`,
+    `harness-toolkit-reviewer-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}.md`,
   )
 
   try {
     fs.writeFileSync(tmpFile, promptText, "utf8")
   } catch (err) {
     console.error(
-      `[opencode-toolkit] failed to write reviewer prompt to ${tmpFile}: ${err instanceof Error ? err.message : err}\n` +
-        `  Set OPENCODE_TOOLKIT_TMP_DIR to a writable absolute path to override the tmp dir candidate chain.`,
+      `[harness-toolkit] failed to write reviewer prompt to ${tmpFile}: ${err instanceof Error ? err.message : err}\n` +
+        `  Set HARNESS_TOOLKIT_TMP_DIR to a writable absolute path to override the tmp dir candidate chain.`,
     )
     return null
   }
@@ -374,7 +374,7 @@ async function consultReviewer(
 
   try {
     return await new Promise<Verdict | null>((resolve) => {
-      const env = { ...process.env, [RECURSION_GUARD]: "1", [LEGACY_RECURSION_GUARD]: "1" }
+      const env = { ...process.env, [RECURSION_GUARD]: "1", ...Object.fromEntries(LEGACY_RECURSION_GUARDS.map((g) => [g, "1"])) }
       const child = spawn(OPENCODE_BIN, argv, {
         cwd,
         env,
@@ -391,7 +391,7 @@ async function consultReviewer(
       child.stderr?.on("data", (d) => (stderr += d.toString()))
       child.on("error", (err) => {
         clearTimeout(timer)
-        console.error("[opencode-toolkit] reviewer spawn error:", err)
+        console.error("[harness-toolkit] reviewer spawn error:", err)
         resolve(null)
       })
       child.on("close", (code) => {
@@ -399,7 +399,7 @@ async function consultReviewer(
         const verdict = extractVerdict(stdout)
         if (!verdict) {
           console.error(
-            `[opencode-toolkit] reviewer exit=${code}, no parseable JSON verdict\n  stdout tail: ${stdout.slice(-500)}\n  stderr tail: ${stderr.slice(-500)}`,
+            `[harness-toolkit] reviewer exit=${code}, no parseable JSON verdict\n  stdout tail: ${stdout.slice(-500)}\n  stderr tail: ${stderr.slice(-500)}`,
           )
         }
         resolve(verdict)
@@ -419,8 +419,8 @@ async function consultReviewer(
  */
 function rewriteTaskResult(original: string, finalText: string, attempts: number, lastVerdict: Verdict | null): string {
   const banner = [
-    `[opencode-toolkit] resumed ${attempts} time(s) under reviewer "${REVIEWER_AGENT}"`,
-    lastVerdict ? `[opencode-toolkit] final verdict: ${lastVerdict.verdict} (${lastVerdict.confidence})` : "",
+    `[harness-toolkit] resumed ${attempts} time(s) under reviewer "${REVIEWER_AGENT}"`,
+    lastVerdict ? `[harness-toolkit] final verdict: ${lastVerdict.verdict} (${lastVerdict.confidence})` : "",
   ]
     .filter(Boolean)
     .join("\n")
@@ -438,7 +438,7 @@ function rewriteTaskResult(original: string, finalText: string, attempts: number
 /**
  * 工程 opencode.json 里能传给 toolkit 的可选项。元组形式声明插件即可：
  *
- *     "plugin": [["opencode-toolkit@github:...", {
+ *     "plugin": [["harness-toolkit@github:...", {
  *        "reviewerModel": "anthropic/claude-haiku-4-5-20251001",
  *        "reviewerVariant": "minimal"
  *     }]]
@@ -451,8 +451,8 @@ function rewriteTaskResult(original: string, finalText: string, attempts: number
  *                       常见值 `high` / `medium` / `low` / `minimal`）。
  *
  * 同名环境变量优先级更高（per-shell 覆盖语义）：
- *   - OPENCODE_TOOLKIT_REVIEWER_MODEL
- *   - OPENCODE_TOOLKIT_REVIEWER_VARIANT
+ *   - HARNESS_TOOLKIT_REVIEWER_MODEL
+ *   - HARNESS_TOOLKIT_REVIEWER_VARIANT
  */
 type ToolkitOptions = {
   reviewerModel?: unknown
@@ -465,8 +465,8 @@ function resolveReviewerOverride(options: ToolkitOptions | undefined): ReviewerO
     return typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined
   }
   return {
-    model: process.env.OPENCODE_TOOLKIT_REVIEWER_MODEL ?? fromOpts("reviewerModel"),
-    variant: process.env.OPENCODE_TOOLKIT_REVIEWER_VARIANT ?? fromOpts("reviewerVariant"),
+    model: process.env.HARNESS_TOOLKIT_REVIEWER_MODEL ?? process.env.OPENCODE_TOOLKIT_REVIEWER_MODEL ?? fromOpts("reviewerModel"),
+    variant: process.env.HARNESS_TOOLKIT_REVIEWER_VARIANT ?? process.env.OPENCODE_TOOLKIT_REVIEWER_VARIANT ?? fromOpts("reviewerVariant"),
   }
 }
 
@@ -475,12 +475,12 @@ function resolveReviewerOverride(options: ToolkitOptions | undefined): ReviewerO
  *
  * 入参：
  *   - input:   PluginInput（含 client / project / directory / worktree / serverUrl / $ ）
- *   - options: opencode.json 里 `["opencode-toolkit", { ... }]` 元组形式传入的对象，
+ *   - options: opencode.json 里 `["harness-toolkit", { ... }]` 元组形式传入的对象，
  *              当前可选字段见 ToolkitOptions
  *
  * 启动期副作用（在返回 hooks 对象之前完成）：
  *   1. 把包内 agents/*.md 安装到 directory/.opencode/agent/。**对当次启动无效**，
- *      下次启动 opencode 才能扫到。手动加速：跑 `npx opencode-toolkit-install`。
+ *      下次启动 opencode 才能扫到。手动加速：跑 `npx harness-toolkit-install`。
  *
  * 注册的钩子：
  *   - config: 把包内 skills/ 路径推进 config.skills.paths（skill 服务惰性读取，
@@ -491,30 +491,30 @@ const ToolkitPlugin: Plugin = async ({ client, directory }, options) => {
   const reviewerOverride = resolveReviewerOverride(options as ToolkitOptions | undefined)
   if (reviewerOverride.model || reviewerOverride.variant) {
     console.log(
-      `[opencode-toolkit] reviewer override: ${reviewerOverride.model ? `model=${reviewerOverride.model} ` : ""}${
+      `[harness-toolkit] reviewer override: ${reviewerOverride.model ? `model=${reviewerOverride.model} ` : ""}${
         reviewerOverride.variant ? `variant=${reviewerOverride.variant}` : ""
       }`.trim(),
     )
   }
   // ── 启动期：安装/更新 agent 文件
   // 仅在非递归环境（即不是审查员子进程）里跑，避免在子进程里反复写 symlink。
-  if (!process.env[RECURSION_GUARD] && !process.env[LEGACY_RECURSION_GUARD]) {
+  if (!process.env[RECURSION_GUARD] && !LEGACY_RECURSION_GUARDS.some((g) => process.env[g])) {
     try {
       const r = installAgents(AGENTS_DIR, directory, PKG_VERSION, (m) => console.log(m))
       if (r.installed > 0) {
         console.log(
-          `[opencode-toolkit] installed ${r.installed} agent file(s) into ${r.targetDir}` +
-            ` (effective on next opencode launch; run \`npx opencode-toolkit-install\` to skip the wait)`,
+          `[harness-toolkit] installed ${r.installed} agent file(s) into ${r.targetDir}` +
+            ` (effective on next opencode launch; run \`npx harness-toolkit-install\` to skip the wait)`,
         )
       }
       if (r.conflicts.length > 0) {
         console.warn(
-          `[opencode-toolkit] skipped ${r.conflicts.length} agent file(s) — already exist as user-owned files (not managed symlinks): ` +
+          `[harness-toolkit] skipped ${r.conflicts.length} agent file(s) — already exist as user-owned files (not managed symlinks): ` +
             r.conflicts.join(", "),
         )
       }
     } catch (err) {
-      console.error("[opencode-toolkit] failed to install agents:", err)
+      console.error("[harness-toolkit] failed to install agents:", err)
     }
 
     // 顺手清理上次 spawn 异常退出可能遗留的陈年 prompt 文件
@@ -537,10 +537,10 @@ const ToolkitPlugin: Plugin = async ({ client, directory }, options) => {
         const list = (skillsCfg.paths = (skillsCfg.paths ?? []).slice() as string[])
         if (!list.includes(SKILLS_DIR)) {
           list.push(SKILLS_DIR)
-          console.log(`[opencode-toolkit] registered skills path: ${SKILLS_DIR}`)
+          console.log(`[harness-toolkit] registered skills path: ${SKILLS_DIR}`)
         }
       } catch (err) {
-        console.error("[opencode-toolkit] failed to register skills path:", err)
+        console.error("[harness-toolkit] failed to register skills path:", err)
       }
     },
 
@@ -549,7 +549,7 @@ const ToolkitPlugin: Plugin = async ({ client, directory }, options) => {
      */
     "tool.execute.after": async (input, output) => {
       // 早退 1：自身递归保护
-      if (process.env[RECURSION_GUARD] || process.env[LEGACY_RECURSION_GUARD]) return
+      if (process.env[RECURSION_GUARD] || LEGACY_RECURSION_GUARDS.some((g) => process.env[g])) return
       // 早退 2：只关心 task 工具
       if (input.tool !== "task") return
       // 早退 3：必须能拿到子 session id
@@ -589,20 +589,20 @@ const ToolkitPlugin: Plugin = async ({ client, directory }, options) => {
         lastVerdict = verdict
 
         if (!verdict) {
-          console.warn(`[opencode-toolkit] session=${sessionId}: no verdict, stopping resume loop`)
+          console.warn(`[harness-toolkit] session=${sessionId}: no verdict, stopping resume loop`)
           break
         }
 
         if (verdict.verdict === "complete") {
           console.log(
-            `[opencode-toolkit] session=${sessionId}: reviewer says complete (${verdict.confidence}) after ${attempts} resume(s)`,
+            `[harness-toolkit] session=${sessionId}: reviewer says complete (${verdict.confidence}) after ${attempts} resume(s)`,
           )
           break
         }
 
         attempts++
         console.warn(
-          `[opencode-toolkit] session=${sessionId} attempt=${attempts}/${MAX_RETRIES} reasons: ${verdict.reasons.join(" | ")}`,
+          `[harness-toolkit] session=${sessionId} attempt=${attempts}/${MAX_RETRIES} reasons: ${verdict.reasons.join(" | ")}`,
         )
 
         try {
@@ -611,7 +611,7 @@ const ToolkitPlugin: Plugin = async ({ client, directory }, options) => {
             body: { parts: [{ type: "text", text: buildContinuation(verdict) }] },
           })
         } catch (err) {
-          console.error(`[opencode-toolkit] resume prompt failed for session=${sessionId}:`, err)
+          console.error(`[harness-toolkit] resume prompt failed for session=${sessionId}:`, err)
           break
         }
       }

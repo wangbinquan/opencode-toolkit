@@ -1,6 +1,6 @@
 node_modules/
 *.log
 .DS_Store
-.opencode-toolkit.installed
+.harness-toolkit.installed
 dist/
 *.tgz

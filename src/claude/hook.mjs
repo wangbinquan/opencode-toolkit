@@ -2,7 +2,7 @@
 /**
  * Claude Code `SubagentStop` hook —— subagent 完成度审查 + 自动续跑。
  *
- * 这是 opencode-toolkit 的 Claude Code adapter 入口。由 `.claude/settings.json`
+ * 这是 harness-toolkit 的 Claude Code adapter 入口。由 `.claude/settings.json`
  * 的 command hook 直接以 `node <abs>/src/claude/hook.mjs` exec，**不经过包的
  * exports/barrel**，所以保持纯 .mjs、零 opencode 符号。
  *

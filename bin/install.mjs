@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /**
- * opencode-toolkit-install —— 一仓两宿主的命令行安装器（跨平台 Linux/macOS/Windows）。
+ * harness-toolkit-install —— 一仓两宿主的命令行安装器（跨平台 Linux/macOS/Windows）。
  *
  * opencode（默认）：把 agents/*.md 铺到 <工程>/.opencode/agent/（symlink，Windows 降级 copy）。
  * Claude Code（--claude）：装 SubagentStop hook + 翻译分发 agents/skills 到 <工程>/.claude/{agents,skills}/。
  *
  * 用法：
- *   npx opencode-toolkit-install                       # opencode: 装 agent 到 cwd
- *   npx opencode-toolkit-install /path/to/proj
- *   npx opencode-toolkit-install --uninstall           # opencode: 卸载 toolkit 自建项
- *   npx opencode-toolkit-install --claude              # Claude Code: 装 SubagentStop hook
- *   npx opencode-toolkit-install --claude --uninstall  # Claude Code: 卸载 hook
- *   npx opencode-toolkit-install --help
+ *   npx harness-toolkit-install                       # opencode: 装 agent 到 cwd
+ *   npx harness-toolkit-install /path/to/proj
+ *   npx harness-toolkit-install --uninstall           # opencode: 卸载 toolkit 自建项
+ *   npx harness-toolkit-install --claude              # Claude Code: 装 SubagentStop hook
+ *   npx harness-toolkit-install --claude --uninstall  # Claude Code: 卸载 hook
+ *   npx harness-toolkit-install --help
  *
  * 注意：本文件是 .mjs 而不是 .ts，因为 npx 调用时不能依赖 bun/tsx。
  *       opencode 的 agent 安装逻辑必须与 src/opencode/installer.ts 同步——任一改了请同步另一个。
@@ -21,7 +21,7 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { MARKER_PREFIX, translateAgent } from "./claude-assets.mjs"
+import { MARKER_PREFIX, isGeneratedByToolkit, translateAgent } from "./claude-assets.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PKG_ROOT = path.resolve(__dirname, "..")
@@ -35,25 +35,37 @@ const PKG_VERSION = (() => {
   }
 })()
 
-const MARKER_FILE = ".opencode-toolkit.json"
+const MARKER_FILE = ".harness-toolkit.json"
+// 旧版本（opencode-toolkit）写的 marker 文件名——升级时仍识别既有安装，避免误判冲突。
+const LEGACY_MARKER_FILES = [".opencode-toolkit.json"]
 
 function sha256OfFile(filepath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filepath)).digest("hex")
 }
 
 function readMarker(targetDir) {
-  const markerPath = path.join(targetDir, MARKER_FILE)
-  try {
-    const data = JSON.parse(fs.readFileSync(markerPath, "utf8"))
-    if (!data.files || typeof data.files !== "object") return { version: "0.0.0", files: {} }
-    return data
-  } catch {
-    return { version: "0.0.0", files: {} }
+  // 先读新 marker，找不到再回退旧名（opencode-toolkit 时期），实现平滑升级
+  for (const name of [MARKER_FILE, ...LEGACY_MARKER_FILES]) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(targetDir, name), "utf8"))
+      if (data.files && typeof data.files === "object") return data
+    } catch {
+      // 试下一个候选
+    }
   }
+  return { version: "0.0.0", files: {} }
 }
 
 function writeMarker(targetDir, marker) {
   fs.writeFileSync(path.join(targetDir, MARKER_FILE), JSON.stringify(marker, null, 2) + "\n")
+  // 迁移：写了新 marker 后删掉旧名残留，避免两份并存
+  for (const name of LEGACY_MARKER_FILES) {
+    try {
+      fs.unlinkSync(path.join(targetDir, name))
+    } catch {
+      // 不存在即可
+    }
+  }
 }
 
 function writeLinkOrCopy(src, dst) {
@@ -81,12 +93,12 @@ function installAgents(targetProjectDir) {
   const result = { installed: 0, unchanged: 0, conflicts: [], targetDir }
 
   if (!fs.existsSync(AGENTS_SRC)) {
-    console.warn(`[opencode-toolkit-install] no agents/ directory at ${AGENTS_SRC}, nothing to do`)
+    console.warn(`[harness-toolkit-install] no agents/ directory at ${AGENTS_SRC}, nothing to do`)
     return result
   }
   const files = fs.readdirSync(AGENTS_SRC).filter((f) => f.endsWith(".md"))
   if (files.length === 0) {
-    console.warn(`[opencode-toolkit-install] agents/ is empty, nothing to do`)
+    console.warn(`[harness-toolkit-install] agents/ is empty, nothing to do`)
     return result
   }
 
@@ -174,7 +186,7 @@ function installAgents(targetProjectDir) {
 function uninstallAgents(targetProjectDir) {
   const targetDir = path.join(targetProjectDir, ".opencode", "agent")
   if (!fs.existsSync(targetDir)) {
-    console.warn(`[opencode-toolkit-install] no ${targetDir}, nothing to remove`)
+    console.warn(`[harness-toolkit-install] no ${targetDir}, nothing to remove`)
     return { removed: 0, preserved: [] }
   }
 
@@ -253,13 +265,13 @@ function installClaudeHook(projectDir) {
   if (fs.existsSync(settingsPath)) {
     const parsed = readJsonSafe(settingsPath)
     if (parsed === undefined) {
-      console.error(`[opencode-toolkit-install] ${settingsPath} 不是合法 JSON，已中止以免覆盖。请手动修复后重试。`)
+      console.error(`[harness-toolkit-install] ${settingsPath} 不是合法 JSON，已中止以免覆盖。请手动修复后重试。`)
       process.exit(2)
     }
     settings = parsed
   }
   if (typeof settings !== "object" || settings === null || Array.isArray(settings)) {
-    console.error(`[opencode-toolkit-install] ${settingsPath} 顶层不是对象，已中止。`)
+    console.error(`[harness-toolkit-install] ${settingsPath} 顶层不是对象，已中止。`)
     process.exit(2)
   }
 
@@ -267,7 +279,7 @@ function installClaudeHook(projectDir) {
   settings.hooks.SubagentStop ??= []
   const groups = settings.hooks.SubagentStop
   if (!Array.isArray(groups)) {
-    console.error(`[opencode-toolkit-install] settings.hooks.SubagentStop 不是数组，已中止。`)
+    console.error(`[harness-toolkit-install] settings.hooks.SubagentStop 不是数组，已中止。`)
     process.exit(2)
   }
 
@@ -288,7 +300,7 @@ function installClaudeHook(projectDir) {
   }
 
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n")
-  console.log(`[opencode-toolkit-install] ${updated ? "updated" : "added"} SubagentStop hook → ${settingsPath}`)
+  console.log(`[harness-toolkit-install] ${updated ? "updated" : "added"} SubagentStop hook → ${settingsPath}`)
   console.log(`  command: ${claudeHookCommand()}  (timeout ${CLAUDE_HOOK_TIMEOUT}s)`)
   console.log(`  续跑上限 CC_TOOLKIT_MAX_RETRIES（默认 3）；审查员模型 CC_TOOLKIT_REVIEWER_MODEL（默认 claude 默认）`)
 }
@@ -296,12 +308,12 @@ function installClaudeHook(projectDir) {
 function uninstallClaudeHook(projectDir) {
   const settingsPath = path.join(projectDir, CLAUDE_SETTINGS_REL)
   if (!fs.existsSync(settingsPath)) {
-    console.warn(`[opencode-toolkit-install] no ${settingsPath}, nothing to remove`)
+    console.warn(`[harness-toolkit-install] no ${settingsPath}, nothing to remove`)
     return
   }
   const settings = readJsonSafe(settingsPath)
   if (!settings || typeof settings.hooks !== "object" || !Array.isArray(settings.hooks.SubagentStop)) {
-    console.warn(`[opencode-toolkit-install] no SubagentStop hooks in ${settingsPath}, nothing to remove`)
+    console.warn(`[harness-toolkit-install] no SubagentStop hooks in ${settingsPath}, nothing to remove`)
     return
   }
 
@@ -321,7 +333,7 @@ function uninstallClaudeHook(projectDir) {
   if (Object.keys(settings.hooks).length === 0) delete settings.hooks
 
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n")
-  console.log(`[opencode-toolkit-install] removed ${removed} toolkit SubagentStop hook(s) from ${settingsPath}`)
+  console.log(`[harness-toolkit-install] removed ${removed} toolkit SubagentStop hook(s) from ${settingsPath}`)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -348,7 +360,7 @@ function installClaudeAgents(projectDir) {
     const { content, tools, warnings } = translateAgent(raw, name, file, PKG_VERSION)
     allWarnings.push(...warnings)
     const dst = path.join(targetDir, file)
-    if (fs.existsSync(dst) && !fs.readFileSync(dst, "utf8").includes(MARKER_PREFIX)) {
+    if (fs.existsSync(dst) && !isGeneratedByToolkit(fs.readFileSync(dst, "utf8"))) {
       console.warn(`  ! ${file}  (skipped — 已存在且非 toolkit 生成，视为你手写的)`)
       skipped.push(dst)
       continue
@@ -368,7 +380,7 @@ function uninstallClaudeAgents(projectDir) {
   for (const file of fs.readdirSync(targetDir).filter((f) => f.endsWith(".md"))) {
     const dst = path.join(targetDir, file)
     try {
-      if (fs.readFileSync(dst, "utf8").includes(MARKER_PREFIX)) {
+      if (isGeneratedByToolkit(fs.readFileSync(dst, "utf8"))) {
         fs.unlinkSync(dst)
         console.log(`  - agents/${file}`)
         removed++
@@ -400,7 +412,7 @@ function installClaudeSkills(projectDir) {
     const name = e.name
     const dstDir = path.join(targetRoot, name)
     const dstSkill = path.join(dstDir, "SKILL.md")
-    if (fs.existsSync(dstSkill) && !fs.readFileSync(dstSkill, "utf8").includes(MARKER_PREFIX)) {
+    if (fs.existsSync(dstSkill) && !isGeneratedByToolkit(fs.readFileSync(dstSkill, "utf8"))) {
       console.warn(`  ! ${name}/  (skipped — 已存在且非 toolkit 生成)`)
       skipped.push(dstDir)
       continue
@@ -410,7 +422,7 @@ function installClaudeSkills(projectDir) {
     const sk = fs.readFileSync(dstSkill, "utf8").replace(/\s*$/, "")
     fs.writeFileSync(
       dstSkill,
-      `${sk}\n\n${MARKER_PREFIX} from skills/${name}/ by opencode-toolkit@${PKG_VERSION} — reinstall 会覆盖 -->\n`,
+      `${sk}\n\n${MARKER_PREFIX} from skills/${name}/ by harness-toolkit@${PKG_VERSION} — reinstall 会覆盖 -->\n`,
     )
     console.log(`  + skills/${name}/`)
     installed++
@@ -425,7 +437,7 @@ function uninstallClaudeSkills(projectDir) {
   for (const e of fs.readdirSync(targetRoot, { withFileTypes: true }).filter((x) => x.isDirectory())) {
     const skillMd = path.join(targetRoot, e.name, "SKILL.md")
     try {
-      if (fs.readFileSync(skillMd, "utf8").includes(MARKER_PREFIX)) {
+      if (isGeneratedByToolkit(fs.readFileSync(skillMd, "utf8"))) {
         fs.rmSync(path.join(targetRoot, e.name), { recursive: true, force: true })
         console.log(`  - skills/${e.name}/`)
         removed++
@@ -446,15 +458,15 @@ const targetDir = positional ? path.resolve(positional) : process.cwd()
 if (wantHelp) {
   console.log(
     [
-      "opencode-toolkit-install — 安装/卸载 toolkit（opencode 或 Claude Code 两个宿主）",
+      "harness-toolkit-install — 安装/卸载 toolkit（opencode 或 Claude Code 两个宿主）",
       "",
       "opencode（默认）：把 agents/*.md 铺到 <工程>/.opencode/agent/",
-      "  opencode-toolkit-install [target-dir]",
-      "  opencode-toolkit-install --uninstall [target-dir]",
+      "  harness-toolkit-install [target-dir]",
+      "  harness-toolkit-install --uninstall [target-dir]",
       "",
       "Claude Code：装 SubagentStop hook + 翻译分发 agents → .claude/agents/ + skills → .claude/skills/",
-      "  opencode-toolkit-install --claude [target-dir]",
-      "  opencode-toolkit-install --claude --uninstall [target-dir]",
+      "  harness-toolkit-install --claude [target-dir]",
+      "  harness-toolkit-install --claude --uninstall [target-dir]",
       "",
       "  --help    显示本帮助",
     ].join("\n"),
@@ -465,19 +477,19 @@ if (wantHelp) {
 const knownFlags = new Set(["--help", "-h", "--uninstall", "-u", "--claude"])
 const unknown = args.find((a) => a.startsWith("-") && !knownFlags.has(a))
 if (unknown) {
-  console.error(`[opencode-toolkit-install] unknown flag: ${unknown}\n  run with --help for usage`)
+  console.error(`[harness-toolkit-install] unknown flag: ${unknown}\n  run with --help for usage`)
   process.exit(2)
 }
 
 if (claudeMode) {
   if (uninstall) {
-    console.log(`[opencode-toolkit-install] removing Claude Code adaptation from ${targetDir}/.claude/`)
+    console.log(`[harness-toolkit-install] removing Claude Code adaptation from ${targetDir}/.claude/`)
     uninstallClaudeHook(targetDir)
     const a = uninstallClaudeAgents(targetDir)
     const s = uninstallClaudeSkills(targetDir)
-    console.log(`[opencode-toolkit-install] removed: hook + agents=${a.removed} skills=${s.removed}`)
+    console.log(`[harness-toolkit-install] removed: hook + agents=${a.removed} skills=${s.removed}`)
   } else {
-    console.log(`[opencode-toolkit-install] installing Claude Code adaptation into ${targetDir}/.claude/`)
+    console.log(`[harness-toolkit-install] installing Claude Code adaptation into ${targetDir}/.claude/`)
     console.log(`  hook → .claude/settings.json`)
     installClaudeHook(targetDir)
     console.log(`  agents → .claude/agents/  (从 opencode frontmatter 翻译)`)
@@ -485,25 +497,25 @@ if (claudeMode) {
     console.log(`  skills → .claude/skills/`)
     const s = installClaudeSkills(targetDir)
     console.log(
-      `[opencode-toolkit-install] done. hook ✓  agents=${a.installed}(skip ${a.skipped.length})  skills=${s.installed}(skip ${s.skipped.length})`,
+      `[harness-toolkit-install] done. hook ✓  agents=${a.installed}(skip ${a.skipped.length})  skills=${s.installed}(skip ${s.skipped.length})`,
     )
   }
 } else if (uninstall) {
-  console.log(`[opencode-toolkit-install] uninstalling toolkit agents from ${targetDir}/.opencode/agent/`)
+  console.log(`[harness-toolkit-install] uninstalling toolkit agents from ${targetDir}/.opencode/agent/`)
   const r = uninstallAgents(targetDir)
-  console.log(`[opencode-toolkit-install] removed=${r.removed} preserved=${r.preserved.length}`)
+  console.log(`[harness-toolkit-install] removed=${r.removed} preserved=${r.preserved.length}`)
   if (r.preserved.length > 0) {
-    console.log("[opencode-toolkit-install] preserved (user-edited, not removed):")
+    console.log("[harness-toolkit-install] preserved (user-edited, not removed):")
     for (const p of r.preserved) console.log(`  - ${p}`)
   }
 } else {
-  console.log(`[opencode-toolkit-install] installing toolkit agents into ${targetDir}/.opencode/agent/`)
+  console.log(`[harness-toolkit-install] installing toolkit agents into ${targetDir}/.opencode/agent/`)
   const r = installAgents(targetDir)
   console.log(
-    `[opencode-toolkit-install] done. installed=${r.installed} unchanged=${r.unchanged} conflicts=${r.conflicts.length}`,
+    `[harness-toolkit-install] done. installed=${r.installed} unchanged=${r.unchanged} conflicts=${r.conflicts.length}`,
   )
   if (r.conflicts.length > 0) {
-    console.log("[opencode-toolkit-install] conflicts (left untouched):")
+    console.log("[harness-toolkit-install] conflicts (left untouched):")
     for (const p of r.conflicts) console.log(`  - ${p}`)
   }
 }

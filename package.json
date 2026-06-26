@@ -1,5 +1,5 @@
 {
-  "name": "opencode-toolkit",
+  "name": "harness-toolkit",
   "version": "0.3.1",
   "description": "团队共享工具包：subagent 任务完成度审查与自动续跑。一仓两宿主——opencode 插件（tool.execute.after）与 Claude Code hook（SubagentStop）",
   "type": "module",
@@ -10,6 +10,7 @@
     "./claude/hook": "./src/claude/hook.mjs"
   },
   "bin": {
+    "harness-toolkit-install": "./bin/install.mjs",
     "opencode-toolkit-install": "./bin/install.mjs"
   },
   "files": [
@@ -31,7 +32,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wangbinquan/opencode-toolkit.git"
+    "url": "git+https://github.com/wangbinquan/harness-toolkit.git"
   },
   "keywords": [
     "opencode",
