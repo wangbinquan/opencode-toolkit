@@ -16,7 +16,7 @@
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["harness-toolkit@github:wangbinquan/harness-toolkit#v0.3.1"]
+  "plugin": ["harness-toolkit@github:wangbinquan/harness-toolkit#v0.4.0"]
 }
 ```
 
@@ -26,7 +26,7 @@
 
 也支持：
 
-- 私有 git URL：`"harness-toolkit@git+ssh://git@your.git/...#v0.3.1"`
+- 私有 git URL：`"harness-toolkit@git+ssh://git@your.git/...#v0.4.0"`
 - 私有 npm registry：`"@your-scope/harness-toolkit"`（先在 `.npmrc` 配 scope registry）
 - 本地路径（开发期）：`"file:///abs/path/to/harness-toolkit"`
 
@@ -203,7 +203,7 @@ npx harness-toolkit-install --claude
   "$schema": "https://opencode.ai/config.json",
   "model": "anthropic/claude-sonnet-4-6",
   "plugin": [
-    ["harness-toolkit@github:wangbinquan/harness-toolkit#v0.3.1", {
+    ["harness-toolkit@github:wangbinquan/harness-toolkit#v0.4.0", {
       "reviewerModel": "anthropic/claude-haiku-4-5-20251001",
       "reviewerVariant": "minimal"
     }]
