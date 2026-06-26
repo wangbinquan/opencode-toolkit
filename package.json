@@ -1,6 +1,6 @@
 {
   "name": "opencode-toolkit",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "团队共享工具包：subagent 任务完成度审查与自动续跑。一仓两宿主——opencode 插件（tool.execute.after）与 Claude Code hook（SubagentStop）",
   "type": "module",
   "main": "./src/index.ts",

@@ -16,7 +16,7 @@
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.6"]
+  "plugin": ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.3.0"]
 }
 ```
 
@@ -26,7 +26,7 @@
 
 也支持：
 
-- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.2.6"`
+- 私有 git URL：`"opencode-toolkit@git+ssh://git@your.git/...#v0.3.0"`
 - 私有 npm registry：`"@your-scope/opencode-toolkit"`（先在 `.npmrc` 配 scope registry）
 - 本地路径（开发期）：`"file:///abs/path/to/opencode-toolkit"`
 
@@ -181,7 +181,7 @@ npx opencode-toolkit-install --claude
   "$schema": "https://opencode.ai/config.json",
   "model": "anthropic/claude-sonnet-4-6",
   "plugin": [
-    ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.2.6", {
+    ["opencode-toolkit@github:wangbinquan/opencode-toolkit#v0.3.0", {
       "reviewerModel": "anthropic/claude-haiku-4-5-20251001",
       "reviewerVariant": "minimal"
     }]
